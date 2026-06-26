@@ -1,0 +1,24 @@
+# Build artifacts & deps (rebuilt inside the image)
+**/venv
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+backend/static
+
+# Local databases / secrets
+*.db
+*.db-*
+backend/*.db
+backend/*.db-*
+**/.env
+
+# Retired desktop app (not part of the web deploy)
+ui/
+core/
+utils/
+Logo/
+main.py
+run.bat
+*.spec
+.claude/
