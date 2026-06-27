@@ -127,21 +127,6 @@ export const Customers = () => (
             columns={PARTY_COLS} fields={PARTY_FIELDS} />
 );
 
-export const Products = () => (
-  <CrudPage title="Products" subtitle="Your designs — pick these when billing" itemName="Product"
-    endpoint="/api/products"
-    columns={[
-      { header: "Name", key: "name" }, { header: "Category", key: "category" },
-      { header: "Unit", key: "unit" }, { header: "Sale Rate", cell: (r) => rupeeFull(r.sale_rate) },
-    ]}
-    fields={[
-      { name: "name", label: "Name (Design No.)", required: true, placeholder: "e.g. D-204" },
-      { name: "category_id", label: "Category", type: "select", optionsFrom: "/api/categories" },
-      { name: "unit_id", label: "Unit", type: "select", optionsFrom: "/api/units" },
-      { name: "sale_rate", label: "Default Sale Rate (MRP)", type: "number" },
-    ]} />
-);
-
 export const MaterialTypes = () => (
   <CrudPage title="Material Types" itemName="Material Type" endpoint="/api/material-types"
     columns={[

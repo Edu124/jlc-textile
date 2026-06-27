@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from ..db import get_db
 from ..auth import require_user
-from .. import models
+from .. import models, services
 
 router = APIRouter(prefix="/api", tags=["masters"], dependencies=[Depends(require_user)])
 
@@ -167,8 +167,18 @@ class ProductIn(BaseModel):
     name: str
     category_id: Optional[int] = None
     unit_id: Optional[int] = None
-    sale_rate: float = 0
+    sale_rate: float = 0          # base rate (fallback for sizes with no rate)
+    rate_m: float = 0
+    rate_l: float = 0
+    rate_xl: float = 0
+    rate_xxl: float = 0
+    rate_mxxl: float = 0
     description: Optional[str] = ""
+
+
+def _size_rates(p):
+    return {"rate_m": p.rate_m or 0, "rate_l": p.rate_l or 0, "rate_xl": p.rate_xl or 0,
+            "rate_xxl": p.rate_xxl or 0, "rate_mxxl": p.rate_mxxl or 0}
 
 
 @router.get("/products")
@@ -178,18 +188,28 @@ def list_products(db: Session = Depends(get_db)):
             .order_by(models.Product.name).all():
         cat = db.query(models.ProductCategory).get(p.category_id) if p.category_id else None
         unit = db.query(models.Unit).get(p.unit_id) if p.unit_id else None
+        fg = db.query(models.FinishedGoodsStock).filter_by(product_id=p.id).first()
         out.append({"id": p.id, "name": p.name, "category_id": p.category_id,
                     "category": cat.name if cat else "", "unit_id": p.unit_id,
                     "unit": unit.name if unit else "", "sale_rate": p.sale_rate,
-                    "description": p.description})
+                    "description": p.description,
+                    "pending_qty": p.pending_qty or 0,
+                    "finished_qty": fg.quantity if fg else 0,
+                    **_size_rates(p)})
     return out
+
+
+def _apply_product(p, body: "ProductIn"):
+    p.name, p.category_id, p.unit_id = body.name.strip(), body.category_id, body.unit_id
+    p.sale_rate, p.description = body.sale_rate, body.description
+    p.rate_m, p.rate_l, p.rate_xl = body.rate_m, body.rate_l, body.rate_xl
+    p.rate_xxl, p.rate_mxxl = body.rate_xxl, body.rate_mxxl
 
 
 @router.post("/products")
 def create_product(body: ProductIn, db: Session = Depends(get_db)):
-    p = models.Product(name=body.name.strip(), category_id=body.category_id,
-                       unit_id=body.unit_id, sale_rate=body.sale_rate,
-                       description=body.description)
+    p = models.Product()
+    _apply_product(p, body)
     db.add(p); db.commit(); db.refresh(p)
     return {"id": p.id}
 
@@ -198,8 +218,7 @@ def create_product(body: ProductIn, db: Session = Depends(get_db)):
 def update_product(pid: int, body: ProductIn, db: Session = Depends(get_db)):
     p = db.query(models.Product).get(pid)
     if not p: raise HTTPException(404, "Not found")
-    p.name, p.category_id, p.unit_id = body.name.strip(), body.category_id, body.unit_id
-    p.sale_rate, p.description = body.sale_rate, body.description
+    _apply_product(p, body)
     db.commit(); return {"ok": True}
 
 
@@ -210,3 +229,30 @@ def delete_product(pid: int, db: Session = Depends(get_db)):
         p.is_active = 0          # soft delete (referenced by bills)
         db.commit()
     return {"ok": True}
+
+
+class SetRateIn(BaseModel):
+    rate: float
+
+
+@router.post("/products/{pid}/set-rate")
+def set_rate(pid: int, body: SetRateIn, db: Session = Depends(get_db)):
+    """Price a job-work return: sets the product's sale rate and moves any
+    pending (awaiting-rate) quantity into Finished Goods stock."""
+    p = db.query(models.Product).get(pid)
+    if not p:
+        raise HTTPException(404, "Not found")
+    if body.rate <= 0:
+        raise HTTPException(400, "Enter a valid rate")
+
+    p.sale_rate = body.rate
+    pending = p.pending_qty or 0
+    if pending > 0:
+        services.adjust_finished_stock(db, p.id, pending)
+        db.add(models.FinishedGoodsTransaction(
+            product_id=p.id, transaction_type="jobwork_priced", quantity=pending,
+            reference_type="set_rate"))
+        p.pending_qty = 0
+
+    db.commit()
+    return {"ok": True, "moved_to_finished": pending}

@@ -64,6 +64,42 @@ def adjust_finished_stock(db: Session, product_id: int, qty_delta: float):
         db.add(models.FinishedGoodsStock(product_id=product_id, quantity=max(0, qty_delta)))
 
 
+# ── Order Form -> Orders sync ─────────────────────────────────────────────────
+
+def sync_order_from_bill(db: Session, bill, prepared):
+    """Mirror a sales (order form) bill into the Orders section so dispatch
+    progress can be tracked there. `prepared` is the (item, row_qty, amount, ...)
+    tuples already computed by the sales router."""
+    order = db.query(models.Order).get(bill.order_id) if bill.order_id else None
+    if order is None:
+        order = models.Order(order_number=next_order_number(db), customer_id=bill.customer_id,
+                             delivery_date=bill.delivery_date,
+                             notes=f"Order Form {bill.bill_number}")
+        db.add(order); db.flush()
+        bill.order_id = order.id
+    else:
+        order.customer_id = bill.customer_id
+        order.delivery_date = bill.delivery_date
+        order.notes = f"Order Form {bill.bill_number}"
+
+    existing = db.query(models.OrderItem).filter_by(order_id=order.id).all()
+    if existing and any((it.delivered_qty or 0) > 0 for it in existing):
+        # Deliveries already recorded — don't touch items, just totals/header.
+        order.total_amount = sum(it.amount or 0 for it in existing)
+        return
+
+    db.query(models.OrderItem).filter_by(order_id=order.id).delete()
+    total = 0.0
+    for it, row_qty, amount, rates, rep_mrp in prepared:
+        rate = (amount / row_qty) if row_qty else 0
+        db.add(models.OrderItem(order_id=order.id, product_id=it.product_id,
+                                quantity=row_qty, rate=rate, amount=amount,
+                                qty_m=it.qty_m or 0, qty_l=it.qty_l or 0, qty_xl=it.qty_xl or 0,
+                                qty_xxl=it.qty_xxl or 0, qty_mxxl=it.qty_mxxl or 0))
+        total += amount
+    order.total_amount = total
+
+
 def get_setting(db: Session, key: str, default: str = "") -> str:
     row = db.query(models.Setting).filter_by(key=key).first()
     return row.value if row else default

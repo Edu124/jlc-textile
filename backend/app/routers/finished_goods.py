@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from ..db import get_db
@@ -11,14 +11,19 @@ router = APIRouter(prefix="/api/finished-goods", tags=["finished-goods"],
 
 @router.get("")
 def list_stock(db: Session = Depends(get_db)):
+    """Only priced products with actual finished-goods stock show here.
+    Job-work returns awaiting a rate live under Products until priced."""
     out = []
     for p in db.query(models.Product).filter(models.Product.is_active == 1)\
             .order_by(models.Product.name).all():
-        cat = db.query(models.ProductCategory).get(p.category_id) if p.category_id else None
-        unit = db.query(models.Unit).get(p.unit_id) if p.unit_id else None
         stock = db.query(models.FinishedGoodsStock).filter_by(product_id=p.id).first()
         qty = stock.quantity if stock else 0
-        out.append({"id": p.id, "name": p.name, "category": cat.name if cat else "",
+        if qty <= 0:
+            continue
+        cat = db.query(models.ProductCategory).get(p.category_id) if p.category_id else None
+        unit = db.query(models.Unit).get(p.unit_id) if p.unit_id else None
+        out.append({"id": p.id, "product_id": p.id, "name": p.name,
+                    "category": cat.name if cat else "",
                     "unit": unit.abbreviation if unit else "", "quantity": qty,
                     "sale_rate": p.sale_rate, "value": qty * (p.sale_rate or 0)})
     return out

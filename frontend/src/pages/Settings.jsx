@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "../api";
-import { useFetch } from "../lib/useFetch.js";
+import { useFetch, apiError, downloadFile } from "../lib/useFetch.js";
 import { PageHeader, Field, Card, Spinner } from "../components/ui.jsx";
 
 const FIELDS = [
@@ -23,7 +23,7 @@ export default function Settings() {
     setBusy(false); setSaved(true); setTimeout(() => setSaved(false), 2500);
   };
 
-  const downloadBackup = () => window.open("/api/backup", "_blank");
+  const downloadBackup = () => downloadFile("/api/backup", `jlc-backup-${new Date().toISOString().slice(0, 10)}.json`);
 
   if (loading) return <Spinner />;
   return (
@@ -53,10 +53,53 @@ export default function Settings() {
         <button className="btn-ghost" onClick={downloadBackup}>⬇ Download Backup (JSON)</button>
       </Card>
 
+      <ChangePassword />
+
       <div className="mt-5 flex items-center gap-3">
         <button className="btn-primary w-40" onClick={save} disabled={busy}>{busy ? <Spinner /> : "Save Settings"}</button>
         {saved && <span className="text-sm text-ok">Saved ✓</span>}
       </div>
     </div>
+  );
+}
+
+function ChangePassword() {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [ok, setOk] = useState(false);
+
+  const save = async () => {
+    setErr(""); setOk(false);
+    if (!current || !next) return setErr("Fill in both passwords");
+    if (next !== confirm) return setErr("New passwords don't match");
+    setBusy(true);
+    try {
+      await api.post("/api/auth/change-password", { current_password: current, new_password: next });
+      setCurrent(""); setNext(""); setConfirm(""); setOk(true);
+      setTimeout(() => setOk(false), 3000);
+    } catch (e) { setErr(apiError(e)); } finally { setBusy(false); }
+  };
+
+  return (
+    <Card title="Change Password" className="mt-4">
+      <p className="mb-3 text-sm text-ink2">Forgot the shared shop password? Set a new one here while you're still logged in.</p>
+      <div className="space-y-3">
+        <Field label="Current Password">
+          <input className="input" type="password" value={current} onChange={(e) => setCurrent(e.target.value)} />
+        </Field>
+        <Field label="New Password">
+          <input className="input" type="password" value={next} onChange={(e) => setNext(e.target.value)} />
+        </Field>
+        <Field label="Confirm New Password">
+          <input className="input" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+        </Field>
+      </div>
+      {err && <div className="mt-3 rounded-lg bg-dangerSoft px-3 py-2 text-sm text-danger">{err}</div>}
+      <button className="btn-primary mt-3 w-40" onClick={save} disabled={busy}>{busy ? <Spinner /> : "Update Password"}</button>
+      {ok && <span className="ml-3 text-sm text-ok">Password updated ✓</span>}
+    </Card>
   );
 }

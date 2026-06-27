@@ -9,11 +9,13 @@ import Purchases from "./pages/Purchases.jsx";
 import RawMaterials from "./pages/RawMaterials.jsx";
 import FinishedGoods from "./pages/FinishedGoods.jsx";
 import Production from "./pages/Production.jsx";
+import Products from "./pages/Products.jsx";
 import AIStudio from "./pages/AIStudio.jsx";
+import VisitingCards from "./pages/VisitingCards.jsx";
 import Reports from "./pages/Reports.jsx";
 import Settings from "./pages/Settings.jsx";
 import {
-  Suppliers, Customers, Products, MaterialTypes, Units,
+  Suppliers, Customers, MaterialTypes, Units,
 } from "./pages/Masters.jsx";
 
 function Protected({ children }) {
@@ -35,6 +37,7 @@ export default function App() {
         <Route path="/production" element={<Production />} />
         <Route path="/suppliers" element={<Suppliers />} />
         <Route path="/customers" element={<Customers />} />
+        <Route path="/visiting-cards" element={<VisitingCards />} />
         <Route path="/products" element={<Products />} />
         <Route path="/material-types" element={<MaterialTypes />} />
         <Route path="/units" element={<Units />} />

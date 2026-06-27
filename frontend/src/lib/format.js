@@ -19,6 +19,7 @@ export const STATUS_COLORS = {
   "In Production": "bg-warnSoft text-warn",
   Ready: "bg-okSoft text-ok",
   Dispatched: "bg-[#2E1A40] text-[#9B85B0]",
+  "Partially Delivered": "bg-warnSoft text-warn",
   Delivered: "bg-okSoft text-ok",
   Cancelled: "bg-dangerSoft text-danger",
   Cutting: "bg-warnSoft text-warn",

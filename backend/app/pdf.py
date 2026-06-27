@@ -206,15 +206,16 @@ def generate_sales_pdf(db: Session, bill_id: int) -> bytes:
     story.append(Spacer(1, 3 * mm))
 
     col_w = [10 * mm, 42 * mm, 16 * mm, 16 * mm, 16 * mm, 16 * mm, 20 * mm, 18 * mm, 32 * mm]
-    data = [["Sr.", "Design No.", "M", "L", "XL", "XXL", "M-XXL", "", "MRP"]]
+    data = [["Sr.", "Design No.", "M", "L", "XL", "XXL", "M-XXL", "", "Amount"]]
     z = lambda v: str(int(v)) if v else ""
     total_qty = 0
+    total_amount = 0
     for i in range(20):
         if i < len(items):
-            it = items[i]; total_qty += it.row_qty or 0
+            it = items[i]; total_qty += it.row_qty or 0; total_amount += it.amount or 0
             data.append([str(i + 1), it.design_no or "", z(it.qty_m), z(it.qty_l),
                          z(it.qty_xl), z(it.qty_xxl), z(it.qty_mxxl), "",
-                         f"{it.mrp:,.0f}" if it.mrp else ""])
+                         f"{it.amount:,.0f}" if it.amount else ""])
         else:
             data.append([str(i + 1), "", "", "", "", "", "", "", ""])
     grid = Table(data, colWidths=col_w, repeatRows=1)
@@ -229,13 +230,18 @@ def generate_sales_pdf(db: Session, bill_id: int) -> bytes:
         ("LEFTPADDING", (1, 0), (1, -1), 6)]))
     story.append(grid)
 
-    bottom = Table([[Paragraph(co["note1"], ParagraphStyle("n", fontName=FONT_BOLD, fontSize=9, textColor=COL_TEXT, leading=12)),
-                     Paragraph("TOTAL QUANTITY", ParagraphStyle("tq", fontName=FONT_BOLD, fontSize=10, alignment=TA_CENTER, textColor=COL_TEXT)),
-                     Paragraph(f"{total_qty:.0f}", ParagraphStyle("tv", fontName=FONT_BOLD, fontSize=11, alignment=TA_CENTER, textColor=COL_TEXT))]],
-                   colWidths=[112 * mm, 42 * mm, 32 * mm])
+    lbl_q = ParagraphStyle("tq", fontName=FONT_BOLD, fontSize=10, alignment=TA_CENTER, textColor=COL_TEXT)
+    val_q = ParagraphStyle("tv", fontName=FONT_BOLD, fontSize=11, alignment=TA_CENTER, textColor=COL_TEXT)
+    bottom = Table([[
+        Paragraph(co["note1"], ParagraphStyle("n", fontName=FONT_BOLD, fontSize=9, textColor=COL_TEXT, leading=12)),
+        Paragraph("TOTAL QTY", lbl_q), Paragraph(f"{total_qty:.0f}", val_q),
+        Paragraph("TOTAL", lbl_q), Paragraph(f"₹ {total_amount:,.0f}", val_q),
+    ]], colWidths=[78 * mm, 28 * mm, 22 * mm, 24 * mm, 34 * mm])
     bottom.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                                 ("BOX", (1, 0), (2, 0), 0.6, COL_GRID),
                                 ("LINEAFTER", (1, 0), (1, 0), 0.6, COL_GRID),
+                                ("BOX", (3, 0), (4, 0), 0.6, COL_GRID),
+                                ("LINEAFTER", (3, 0), (3, 0), 0.6, COL_GRID),
                                 ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
     story.append(bottom)
     story.append(Spacer(1, 4 * mm))

@@ -74,7 +74,24 @@ class RawMaterialTransaction(Base):
     rate = Column(Float)
     reference_id = Column(Integer)
     reference_type = Column(String)
+    recipient_type = Column(String)   # Given to tailor | Given to customer | Other
+    recipient_name = Column(String)   # tailor/customer/person name
     notes = Column(Text)
+    created_at = Column(DateTime, default=_now)
+
+
+class TailorJob(Base):
+    """Raw material given to a tailor for stitching (job work).
+    held = qty_given - qty_returned. Returned quantity flows into the linked
+    Product as 'pending_qty' (awaiting a rate) before it becomes finished
+    goods stock."""
+    __tablename__ = "tailor_jobs"
+    id = Column(Integer, primary_key=True)
+    material_type_id = Column(Integer, ForeignKey("raw_material_types.id"))
+    tailor_name = Column(String)
+    qty_given = Column(Float, default=0)
+    qty_returned = Column(Float, default=0)
+    product_id = Column(Integer, ForeignKey("products.id"))
     created_at = Column(DateTime, default=_now)
 
 
@@ -90,9 +107,18 @@ class Product(Base):
     name = Column(String, nullable=False)
     category_id = Column(Integer, ForeignKey("product_categories.id"))
     unit_id = Column(Integer, ForeignKey("units.id"))
-    sale_rate = Column(Float, default=0)
+    sale_rate = Column(Float, default=0)        # base rate (fallback for any size)
+    # Per-size rates (a 0 here falls back to sale_rate for that size).
+    rate_m = Column(Float, default=0)
+    rate_l = Column(Float, default=0)
+    rate_xl = Column(Float, default=0)
+    rate_xxl = Column(Float, default=0)
+    rate_mxxl = Column(Float, default=0)
     description = Column(Text)
     image_path = Column(String)
+    # Quantity returned from job-work that is awaiting a rate before it
+    # becomes finished-goods stock (see TailorJob).
+    pending_qty = Column(Float, default=0)
     is_active = Column(Integer, default=1)
     created_at = Column(DateTime, default=_now)
 
@@ -167,6 +193,19 @@ class OrderItem(Base):
     quantity = Column(Float)
     rate = Column(Float)
     amount = Column(Float)
+    delivered_qty = Column(Float, default=0)
+    # Size breakdown (only populated when this item came from a size-grid
+    # Order Form; manually-added Order items leave these at 0).
+    qty_m = Column(Float, default=0)
+    qty_l = Column(Float, default=0)
+    qty_xl = Column(Float, default=0)
+    qty_xxl = Column(Float, default=0)
+    qty_mxxl = Column(Float, default=0)
+    delivered_m = Column(Float, default=0)
+    delivered_l = Column(Float, default=0)
+    delivered_xl = Column(Float, default=0)
+    delivered_xxl = Column(Float, default=0)
+    delivered_mxxl = Column(Float, default=0)
 
 
 class PurchaseBill(Base):
@@ -228,8 +267,15 @@ class SalesBillItem(Base):
     qty_xl = Column(Float, default=0)
     qty_xxl = Column(Float, default=0)
     qty_mxxl = Column(Float, default=0)
+    # Per-size rate snapshot used on this bill (so totals stay correct even
+    # if the product's rates change later).
+    rate_m = Column(Float, default=0)
+    rate_l = Column(Float, default=0)
+    rate_xl = Column(Float, default=0)
+    rate_xxl = Column(Float, default=0)
+    rate_mxxl = Column(Float, default=0)
     row_qty = Column(Float, default=0)
-    mrp = Column(Float, default=0)
+    mrp = Column(Float, default=0)       # representative rate (kept for compatibility)
     amount = Column(Float, default=0)
     unit_id = Column(Integer)
     quantity = Column(Float)

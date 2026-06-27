@@ -17,6 +17,7 @@ const NAV = [
   { section: "Masters", items: [
     ["Suppliers", "/suppliers", "◷"],
     ["Customers", "/customers", "◶"],
+    ["Visiting Cards", "/visiting-cards", "▣"],
     ["Products", "/products", "◼"],
     ["Material Types", "/material-types", "◻"],
     ["Units", "/units", "◫"],
