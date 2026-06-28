@@ -11,6 +11,14 @@ frontend/node_modules/
 frontend/dist/
 backend/static/
 
+# Expo mobile app build artifacts
+mobile-app/node_modules/
+mobile-app/.expo/
+mobile-app/dist/
+mobile-app/android/
+mobile-app/ios/
+**/node_modules/
+
 # Local databases & secrets
 *.db
 *.db-*

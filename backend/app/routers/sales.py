@@ -42,6 +42,7 @@ class SalesBillIn(BaseModel):
     customer_id: int
     bill_date: Optional[str] = None
     delivery_date: Optional[str] = None
+    reference_no: Optional[str] = ""
     transport: Optional[str] = ""
     agent: Optional[str] = ""
     items: List[SalesItemIn]
@@ -60,6 +61,7 @@ def list_bills(db: Session = Depends(get_db)):
         item_count = db.query(models.SalesBillItem).filter_by(bill_id=b.id).count()
         out.append({"id": b.id, "bill_number": b.bill_number, "bill_date": b.bill_date,
                     "customer": cust.name if cust else "", "designs": item_count,
+                    "order_id": b.order_id,
                     "total_qty": b.total_qty or 0, "total_amount": b.total_amount or 0})
     return out
 
@@ -72,7 +74,8 @@ def get_bill(bill_id: int, db: Session = Depends(get_db)):
     items = db.query(models.SalesBillItem).filter_by(bill_id=bill_id).all()
     return {
         "id": b.id, "bill_number": b.bill_number, "bill_date": b.bill_date,
-        "delivery_date": b.delivery_date, "transport": b.transport, "agent": b.agent,
+        "delivery_date": b.delivery_date, "reference_no": b.reference_no or "",
+        "transport": b.transport, "agent": b.agent,
         "customer": {"id": cust.id, "name": cust.name, "phone": cust.phone,
                      "address": cust.address, "gst_number": cust.gst_number} if cust else None,
         "total_qty": b.total_qty or 0, "total_amount": b.total_amount or 0,
@@ -112,7 +115,8 @@ def create_bill(body: SalesBillIn, db: Session = Depends(get_db)):
     bill = models.SalesBill(
         bill_number=services.next_sales_number(db), customer_id=body.customer_id,
         bill_date=body.bill_date or date.today().isoformat(),
-        delivery_date=body.delivery_date, transport=body.transport, agent=body.agent,
+        delivery_date=body.delivery_date, reference_no=body.reference_no,
+        transport=body.transport, agent=body.agent,
         subtotal=total_amt, gst_type="none", total_qty=total_qty, total_amount=total_amt)
     db.add(bill); db.flush()
 
@@ -158,6 +162,7 @@ def update_bill(bill_id: int, body: SalesBillIn, db: Session = Depends(get_db)):
     bill.customer_id = body.customer_id
     bill.bill_date = body.bill_date or bill.bill_date
     bill.delivery_date = body.delivery_date
+    bill.reference_no = body.reference_no
     bill.transport = body.transport
     bill.agent = body.agent
     bill.subtotal = total_amt

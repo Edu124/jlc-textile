@@ -10,6 +10,7 @@ export default function Sales() {
   const { data: bills, loading, reload } = useFetch("/api/sales");
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [delivering, setDelivering] = useState(null);
 
   const del = async (id) => {
     if (!confirm("Delete this order form?")) return;
@@ -26,6 +27,7 @@ export default function Sales() {
     { header: "Actions", cell: (r) => (
       <div className="flex gap-3">
         <button className="text-accent" onClick={() => openPdf(`/api/sales/${r.id}/pdf`)}>PDF</button>
+        <button className="text-accent" onClick={() => setDelivering(r)}>Delivery</button>
         <button className="text-accent" onClick={() => setEditing(r.id)}>Edit</button>
         <button className="text-danger" onClick={() => del(r.id)}>Delete</button>
       </div>
@@ -34,12 +36,178 @@ export default function Sales() {
 
   return (
     <div>
-      <PageHeader title="Order Forms" subtitle="Jai Laxmi Creation size-grid order forms"
+      <PageHeader title="Order Forms" subtitle="Tap Delivery on a bill, then a design, to mark how much is delivered"
         action={<button className="btn-primary" onClick={() => setOpen(true)}>+ New Order Form</button>} />
       {loading ? <Spinner /> : <Table columns={columns} rows={bills} empty="No order forms yet" />}
       {open && <NewOrderForm onClose={() => setOpen(false)} onSaved={() => { setOpen(false); reload(); }} />}
       {editing && <NewOrderForm billId={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); }} />}
+      {delivering && <DeliveryModal bill={delivering} onClose={() => setDelivering(null)} />}
     </div>
+  );
+}
+
+const SIZE_NAME = { qty_m: "M", qty_l: "L", qty_xl: "XL", qty_xxl: "XXL", qty_mxxl: "M-XXL" };
+
+function DeliveryModal({ bill, onClose }) {
+  const { data: order, loading, reload } = useFetch(bill.order_id ? `/api/orders/${bill.order_id}` : null, [bill.order_id]);
+  const [designFor, setDesignFor] = useState(null);
+
+  if (!bill.order_id) {
+    return (
+      <Modal open onClose={onClose} title={`Delivery — ${bill.bill_number}`}>
+        <p className="text-sm text-muted">This bill has no delivery record yet. Re-save it from Edit to enable delivery tracking.</p>
+        <div className="mt-4 flex justify-end"><button className="btn-ghost" onClick={onClose}>Close</button></div>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Delivery — ${bill.bill_number}`} wide>
+      <p className="mb-3 text-sm text-muted">Tap a design to mark how many of each size are delivered. Leftover adjusts automatically.</p>
+      {loading || !order ? <Spinner /> : (
+        <div className="space-y-2">
+          {order.items.map((it) => {
+            const totalDelivered = it.delivered_qty || 0;
+            const done = totalDelivered >= it.quantity && it.quantity > 0;
+            return (
+              <button key={it.id} onClick={() => setDesignFor(it)}
+                className="flex w-full items-center justify-between rounded-lg bg-surface2 px-3 py-2.5 text-left hover:bg-surface3">
+                <div>
+                  <div className="text-sm font-semibold text-ink">{it.design_no || it.product || "Design"}</div>
+                  <div className="text-xs text-muted">
+                    {SIZES.filter(([k]) => it[k] > 0).map(([k, l]) => `${l}:${it[k]}`).join("  ") || "—"}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className={done ? "text-sm font-semibold text-ok" : "text-sm font-semibold text-ink"}>
+                    {num(totalDelivered, 0)} / {num(it.quantity, 0)}
+                  </div>
+                  <div className="text-[11px] text-muted">delivered</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <div className="mt-4 flex justify-end"><button className="btn-ghost" onClick={onClose}>Close</button></div>
+      {designFor && (
+        <DesignDeliverModal orderId={bill.order_id} item={designFor}
+          onClose={() => { setDesignFor(null); reload(); }}
+          onSaved={reload} />
+      )}
+    </Modal>
+  );
+}
+
+function DesignDeliverModal({ orderId, item, onClose, onSaved }) {
+  const { data: allLogs, reload: reloadLogs } = useFetch(`/api/orders/${orderId}/deliveries`);
+  const { data: order, reload: reloadOrder } = useFetch(`/api/orders/${orderId}`);
+  // Live item (so delivered totals refresh after each log).
+  const it = order?.items.find((x) => x.id === item.id) || item;
+  const logs = (allLogs || []).filter((l) => l.order_item_id === item.id);
+
+  const hasSizes = SIZES.some(([k]) => it[k] > 0);
+  const [vals, setVals] = useState({ qty_m: "", qty_l: "", qty_xl: "", qty_xxl: "", qty_mxxl: "", flat: "" });
+  const [dDate, setDDate] = useState(new Date().toISOString().slice(0, 10));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const remainingSize = (k) => Math.max(0, (it[k] || 0) - (it[`delivered_${k.slice(4)}`] || 0));
+  const remainingFlat = Math.max(0, (it.quantity || 0) - (it.delivered_qty || 0));
+
+  const refresh = () => { reloadLogs(); reloadOrder(); onSaved?.(); };
+
+  const save = async () => {
+    setBusy(true); setErr("");
+    const body = { delivery_date: dDate };
+    if (hasSizes) {
+      let any = false;
+      for (const [k] of SIZES) { const v = Number(vals[k]) || 0; body[k.slice(4)] = v; if (v > 0) any = true; }
+      if (!any) { setBusy(false); return setErr("Enter pieces delivered now"); }
+    } else {
+      const v = Number(vals.flat) || 0;
+      if (!(v > 0)) { setBusy(false); return setErr("Enter pieces delivered now"); }
+      body.m = v; // single-bucket items use M slot as the plain count
+    }
+    try {
+      await api.post(`/api/orders/${orderId}/items/${item.id}/deliver-log`, body);
+      setVals({ qty_m: "", qty_l: "", qty_xl: "", qty_xxl: "", qty_mxxl: "", flat: "" });
+      refresh();
+    } catch (e) { setErr(apiError(e)); } finally { setBusy(false); }
+  };
+
+  const removeLog = async (id) => {
+    if (!confirm("Undo this delivery entry?")) return;
+    await api.delete(`/api/orders/${orderId}/deliveries/${id}`); refresh();
+  };
+
+  const totalDelivered = it.delivered_qty || 0;
+  const totalOrdered = it.quantity || 0;
+  const sizeStr = (s) => SIZES.filter(([k]) => s[k.slice(4)] > 0).map(([k, l]) => `${l}:${num(s[k.slice(4)], 0)}`).join("  ") || `${num(s.m || 0, 0)}`;
+
+  return (
+    <Modal open onClose={onClose} title={`${it.design_no || it.product} — Delivery`} wide>
+      {/* Summary */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="rounded-xl bg-surface2 px-3 py-2 text-center">
+          <div className="text-xl font-extrabold text-ink">{num(totalOrdered, 0)}</div>
+          <div className="text-[11px] uppercase tracking-wide text-muted">Ordered</div>
+        </div>
+        <div className="rounded-xl bg-surface2 px-3 py-2 text-center">
+          <div className="text-xl font-extrabold text-ok">{num(totalDelivered, 0)}</div>
+          <div className="text-[11px] uppercase tracking-wide text-muted">Delivered</div>
+        </div>
+        <div className="rounded-xl bg-surface2 px-3 py-2 text-center">
+          <div className="text-xl font-extrabold text-warn">{num(totalOrdered - totalDelivered, 0)}</div>
+          <div className="text-[11px] uppercase tracking-wide text-muted">Pending</div>
+        </div>
+      </div>
+
+      {/* Add a dated delivery */}
+      <div className="mt-4 rounded-xl border border-separator bg-bg p-3">
+        <div className="mb-2 text-xs font-bold uppercase tracking-wide text-muted">Deliver Now</div>
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="w-32"><label className="label">Date</label>
+            <input type="date" className="input" value={dDate} onChange={(e) => setDDate(e.target.value)} /></div>
+          {hasSizes ? SIZES.filter(([k]) => it[k] > 0).map(([k, lbl]) => (
+            <div key={k} className="w-16 text-center">
+              <div className="label">{lbl} <span className="text-muted">·{remainingSize(k)}</span></div>
+              <input className="input px-1 text-center" inputMode="numeric" value={vals[k]}
+                     onChange={(e) => setVals({ ...vals, [k]: e.target.value.replace(/[^0-9]/g, "") })} />
+              <button type="button" className="mt-0.5 block w-full text-[11px] text-accent hover:underline"
+                      onClick={() => setVals({ ...vals, [k]: remainingSize(k) })}>all</button>
+            </div>
+          )) : (
+            <div className="w-24"><label className="label">Pieces <span className="text-muted">·{remainingFlat} left</span></label>
+              <input className="input text-center" inputMode="numeric" value={vals.flat}
+                     onChange={(e) => setVals({ ...vals, flat: e.target.value.replace(/[^0-9]/g, "") })} /></div>
+          )}
+          <button className="btn-primary" onClick={save} disabled={busy}>{busy ? <Spinner /> : "+ Add"}</button>
+        </div>
+        {err && <div className="mt-2 rounded-lg bg-dangerSoft px-3 py-2 text-sm text-danger">{err}</div>}
+      </div>
+
+      {/* Dated log */}
+      <div className="mt-4">
+        <div className="mb-2 text-xs font-bold uppercase tracking-wide text-muted">Delivery Log</div>
+        {!logs.length ? (
+          <div className="rounded-lg bg-surface2 px-3 py-4 text-center text-sm text-muted">Nothing delivered yet</div>
+        ) : (
+          <div className="space-y-1">
+            {logs.map((l) => (
+              <div key={l.id} className="flex items-center gap-3 rounded-lg bg-surface2 px-3 py-2 text-sm">
+                <span className="font-semibold text-ink">{num(l.pieces, 0)} pcs</span>
+                <span className="text-xs text-muted">{sizeStr(l.sizes)}</span>
+                <span className="ml-auto text-xs text-muted">{l.date}</span>
+                <button className="text-danger" onClick={() => removeLog(l.id)}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4 flex justify-end"><button className="btn-ghost" onClick={onClose}>Close</button></div>
+    </Modal>
   );
 }
 
@@ -47,9 +215,11 @@ function NewOrderForm({ onClose, onSaved, billId }) {
   const { data: customers } = useFetch("/api/customers");
   const { data: products } = useFetch("/api/products");
   const { data: existing } = useFetch(billId ? `/api/sales/${billId}` : null, [billId]);
+  const { data: availability } = useFetch("/api/finished-goods/availability");
   const [customerId, setCustomerId] = useState("");
   const [billDate, setBillDate] = useState(new Date().toISOString().slice(0, 10));
   const [delivery, setDelivery] = useState("");
+  const [reference, setReference] = useState("");
   const [transport, setTransport] = useState("");
   const [agent, setAgent] = useState("");
   const [items, setItems] = useState([]);
@@ -61,6 +231,7 @@ function NewOrderForm({ onClose, onSaved, billId }) {
       setCustomerId(String(existing.customer?.id || ""));
       setBillDate(existing.bill_date || new Date().toISOString().slice(0, 10));
       setDelivery(existing.delivery_date || "");
+      setReference(existing.reference_no || "");
       setTransport(existing.transport || "");
       setAgent(existing.agent || "");
       setItems(existing.items.map((it) => ({ ...it })));
@@ -72,6 +243,12 @@ function NewOrderForm({ onClose, onSaved, billId }) {
   const [sizes, setSizes] = useState({ qty_m: "", qty_l: "", qty_xl: "", qty_xxl: "", qty_mxxl: "" });
 
   const selProduct = products?.find((x) => String(x.id) === String(pid));
+  // Available stock per size for the selected design (by name).
+  const selAvail = selProduct && availability
+    ? availability.find((a) => a.name.trim().toLowerCase() === selProduct.name.trim().toLowerCase())
+    : null;
+  // Once a design is picked, always show stock (0 when the design has none yet).
+  const availFor = (qtyKey) => selProduct ? (selAvail ? (selAvail.available[qtyKey.replace("qty_", "")] || 0) : 0) : null;
 
   // Per-size rate from the product, falling back to its base sale_rate.
   const sizeRate = (p, sizeKey) => {
@@ -105,7 +282,7 @@ function NewOrderForm({ onClose, onSaved, billId }) {
     setBusy(true); setErr("");
     const payload = {
       customer_id: Number(customerId), bill_date: billDate, delivery_date: delivery || null,
-      transport, agent,
+      reference_no: reference, transport, agent,
       items: items.map(({ design_no, product_id, qty_m, qty_l, qty_xl, qty_xxl, qty_mxxl }) =>
         ({ design_no, product_id, qty_m, qty_l, qty_xl, qty_xxl, qty_mxxl })),
     };
@@ -127,6 +304,7 @@ function NewOrderForm({ onClose, onSaved, billId }) {
         </Field>
         <Field label="Bill Date"><input type="date" className="input" value={billDate} onChange={(e) => setBillDate(e.target.value)} /></Field>
         <Field label="Delivery Date"><input type="date" className="input" value={delivery} onChange={(e) => setDelivery(e.target.value)} /></Field>
+        <Field label="Reference No. (optional)"><input className="input" value={reference} onChange={(e) => setReference(e.target.value)} placeholder="e.g. PO-1234" /></Field>
         <Field label="Transport"><input className="input" value={transport} onChange={(e) => setTransport(e.target.value)} placeholder="Transporter" /></Field>
         <Field label="Agent"><input className="input" value={agent} onChange={(e) => setAgent(e.target.value)} placeholder="Sales agent" /></Field>
       </div>
@@ -140,20 +318,37 @@ function NewOrderForm({ onClose, onSaved, billId }) {
             {products?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </Select>
         </div>
-        {SIZES.map(([k, lbl]) => (
-          <div key={k} className="w-16">
-            <label className="label text-center">{lbl}</label>
-            <input className="input px-1 text-center" inputMode="numeric" value={sizes[k]}
-                   onChange={(e) => setSizes({ ...sizes, [k]: e.target.value.replace(/[^0-9]/g, "") })} />
-            {selProduct && <div className="mt-0.5 text-center text-[10px] text-muted">₹{sizeRate(selProduct, k)}</div>}
-          </div>
-        ))}
+        {SIZES.map(([k, lbl]) => {
+          const avail = availFor(k);
+          const short = avail !== null && (Number(sizes[k]) || 0) > avail;
+          return (
+            <div key={k} className="w-16">
+              <label className="label text-center">{lbl}</label>
+              <input className={`input px-1 text-center ${short ? "border-danger" : ""}`} inputMode="numeric" value={sizes[k]}
+                     onChange={(e) => setSizes({ ...sizes, [k]: e.target.value.replace(/[^0-9]/g, "") })} />
+              {selProduct && <div className="mt-0.5 text-center text-[10px] text-muted">₹{sizeRate(selProduct, k)}</div>}
+              {avail !== null && (
+                <div className={`text-center text-[10px] ${short ? "text-danger" : "text-ok"}`}>stk {num(avail, 0)}</div>
+              )}
+            </div>
+          );
+        })}
         <div className="w-24">
           <label className="label">Amount</label>
           <div className="input flex items-center justify-end font-semibold text-ok">{rupeeFull(entryAmount)}</div>
         </div>
         <button className="btn-primary" onClick={addItem}>+ Add</button>
       </div>
+      {selProduct && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
+          <span className="font-semibold uppercase tracking-wide text-muted">In stock:</span>
+          {SIZES.map(([k, lbl]) => {
+            const v = availFor(k) ?? 0;
+            return <span key={k} className={`rounded px-1.5 py-0.5 ${v > 0 ? "bg-okSoft text-ok" : "bg-surface2 text-muted"}`}>{lbl} {num(v, 0)}</span>;
+          })}
+          {!selAvail && <span className="text-muted">— no finished-goods stock recorded for this design yet</span>}
+        </div>
+      )}
       {pid && !selProduct?.rate_m && !selProduct?.sale_rate && (
         <p className="mt-1 text-xs text-warn">This design has no rates set. Add size rates in Products first.</p>
       )}

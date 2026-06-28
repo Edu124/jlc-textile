@@ -84,14 +84,49 @@ class TailorJob(Base):
     """Raw material given to a tailor for stitching (job work).
     held = qty_given - qty_returned. Returned quantity flows into the linked
     Product as 'pending_qty' (awaiting a rate) before it becomes finished
-    goods stock."""
+    goods stock. target_pieces is how many stitched pieces the tailor is
+    expected to deliver from this fabric; actual deliveries are logged as
+    TailorDelivery rows (dated, with an optional reference photo)."""
     __tablename__ = "tailor_jobs"
     id = Column(Integer, primary_key=True)
     material_type_id = Column(Integer, ForeignKey("raw_material_types.id"))
     tailor_name = Column(String)
+    tailor_type = Column(String, default="work")   # "work" (fabric→pieces) | "final" (pieces→finished)
     qty_given = Column(Float, default=0)
     qty_returned = Column(Float, default=0)
+    target_pieces = Column(Float, default=0)
+    # Work jobs only: pieces already handed onward to final tailors.
+    # ready-to-assign = (pieces delivered by this work tailor) - assigned_pieces.
+    assigned_pieces = Column(Float, default=0)
+    # Final jobs: the work job they were carved out of.
+    parent_job_id = Column(Integer, ForeignKey("tailor_jobs.id"))
+    # Optional per-size piece breakdown (how many of each size to make / given).
+    size_m = Column(Float, default=0)
+    size_l = Column(Float, default=0)
+    size_xl = Column(Float, default=0)
+    size_xxl = Column(Float, default=0)
+    size_mxxl = Column(Float, default=0)
     product_id = Column(Integer, ForeignKey("products.id"))
+    created_at = Column(DateTime, default=_now)
+
+
+class TailorDelivery(Base):
+    """One batch of finished pieces a tailor brought back for a TailorJob.
+    image_path holds a base64 data URL (same approach as AIDesign) so a
+    reference photo travels with the record without needing a filesystem."""
+    __tablename__ = "tailor_deliveries"
+    id = Column(Integer, primary_key=True)
+    job_id = Column(Integer, ForeignKey("tailor_jobs.id"))
+    delivery_date = Column(String)
+    pieces = Column(Float, default=0)
+    # Optional per-size breakdown of this delivery (sum = pieces when used).
+    size_m = Column(Float, default=0)
+    size_l = Column(Float, default=0)
+    size_xl = Column(Float, default=0)
+    size_xxl = Column(Float, default=0)
+    size_mxxl = Column(Float, default=0)
+    image_path = Column(Text)
+    notes = Column(Text)
     created_at = Column(DateTime, default=_now)
 
 
@@ -194,6 +229,9 @@ class OrderItem(Base):
     rate = Column(Float)
     amount = Column(Float)
     delivered_qty = Column(Float, default=0)
+    # Design number carried over from the source Order Form line, so the
+    # delivery UI on the Order Form can label each line by design.
+    design_no = Column(String)
     # Size breakdown (only populated when this item came from a size-grid
     # Order Form; manually-added Order items leave these at 0).
     qty_m = Column(Float, default=0)
@@ -243,6 +281,7 @@ class SalesBill(Base):
     order_id = Column(Integer)
     bill_date = Column(String)
     delivery_date = Column(String)
+    reference_no = Column(String)
     transport = Column(String)
     agent = Column(String)
     subtotal = Column(Float, default=0)
@@ -280,6 +319,26 @@ class SalesBillItem(Base):
     unit_id = Column(Integer)
     quantity = Column(Float)
     rate = Column(Float)
+
+
+class OrderDelivery(Base):
+    """One dated delivery event against an order line (one design). Records the
+    per-size pieces delivered that day; OrderItem.delivered_* holds the running
+    total."""
+    __tablename__ = "order_deliveries"
+    id = Column(Integer, primary_key=True)
+    order_id = Column(Integer, ForeignKey("orders.id"))
+    order_item_id = Column(Integer, ForeignKey("order_items.id"))
+    design_no = Column(String)
+    delivery_date = Column(String)
+    pieces = Column(Float, default=0)
+    size_m = Column(Float, default=0)
+    size_l = Column(Float, default=0)
+    size_xl = Column(Float, default=0)
+    size_xxl = Column(Float, default=0)
+    size_mxxl = Column(Float, default=0)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=_now)
 
 
 class AIDesign(Base):

@@ -192,10 +192,11 @@ def generate_sales_pdf(db: Session, bill_id: int) -> bytes:
     val = lambda t: Paragraph(t or "", s_field)
     meta = Table([
         [fld("Party"), val(cust.name if cust else ""), fld("No."), val(bill.bill_number)],
-        [fld("Contact"), val(cust.phone if cust else ""), fld("Date"), val(_fmt_date(bill.bill_date))],
-        [fld("Add."), val(addr1), fld("Delivery Date"), val(_fmt_date(bill.delivery_date))],
-        [fld(""), val(addr2), fld("Transport"), val(bill.transport)],
-        [fld("GST No."), val(cust.gst_number if cust else ""), fld("Agent"), val(bill.agent)],
+        [fld("Contact"), val(cust.phone if cust else ""), fld("Ref. No."), val(getattr(bill, "reference_no", "") or "")],
+        [fld("Add."), val(addr1), fld("Date"), val(_fmt_date(bill.bill_date))],
+        [fld(""), val(addr2), fld("Delivery Date"), val(_fmt_date(bill.delivery_date))],
+        [fld("GST No."), val(cust.gst_number if cust else ""), fld("Transport"), val(bill.transport)],
+        [fld(""), val(""), fld("Agent"), val(bill.agent)],
     ], colWidths=[20 * mm, 90 * mm, 28 * mm, 50 * mm])
     meta.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
                               ("LEFTPADDING", (0, 0), (-1, -1), 1), ("RIGHTPADDING", (0, 0), (-1, -1), 2),

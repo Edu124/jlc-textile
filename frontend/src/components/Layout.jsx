@@ -11,7 +11,6 @@ const NAV = [
   ]},
   { section: "Commerce", items: [
     ["Order Forms", "/sales", "↑"],
-    ["Orders", "/orders", "◎"],
     ["Purchases", "/purchases", "↓"],
   ]},
   { section: "Masters", items: [
@@ -19,7 +18,6 @@ const NAV = [
     ["Customers", "/customers", "◶"],
     ["Visiting Cards", "/visiting-cards", "▣"],
     ["Products", "/products", "◼"],
-    ["Material Types", "/material-types", "◻"],
     ["Units", "/units", "◫"],
   ]},
   { section: "Tools", items: [

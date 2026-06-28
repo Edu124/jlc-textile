@@ -96,10 +96,14 @@ def summary(db: Session = Depends(get_db)):
                         "unit": unit.abbreviation if unit else ""})
 
     recent = []
-    for o in db.query(models.Order).order_by(models.Order.id.desc()).limit(5).all():
+    for o in db.query(models.Order).order_by(models.Order.id.desc()).limit(8).all():
         cust = db.query(models.Customer).get(o.customer_id)
-        recent.append({"order_number": o.order_number, "customer": cust.name if cust else "",
+        items = db.query(models.OrderItem).filter_by(order_id=o.id).all()
+        tq = sum(it.quantity or 0 for it in items)
+        dq = sum(it.delivered_qty or 0 for it in items)
+        recent.append({"id": o.id, "order_number": o.order_number, "customer": cust.name if cust else "",
                        "status": o.status, "total_amount": o.total_amount,
+                       "total_qty": tq, "delivered_qty": dq,
                        "date": o.created_at.isoformat()[:10] if o.created_at else ""})
 
     return {"raw_stock_value": float(raw_val), "finished_goods_qty": float(fg_qty),

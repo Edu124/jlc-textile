@@ -94,6 +94,7 @@ def sync_order_from_bill(db: Session, bill, prepared):
         rate = (amount / row_qty) if row_qty else 0
         db.add(models.OrderItem(order_id=order.id, product_id=it.product_id,
                                 quantity=row_qty, rate=rate, amount=amount,
+                                design_no=getattr(it, "design_no", "") or "",
                                 qty_m=it.qty_m or 0, qty_l=it.qty_l or 0, qty_xl=it.qty_xl or 0,
                                 qty_xxl=it.qty_xxl or 0, qty_mxxl=it.qty_mxxl or 0))
         total += amount

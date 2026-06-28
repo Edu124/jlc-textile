@@ -1,11 +1,13 @@
+import { useState } from "react";
 import {
-  BarChart, Bar, PieChart, Pie, Cell, ResponsiveContainer, XAxis, Tooltip,
+  PieChart, Pie, Cell, ResponsiveContainer, Tooltip,
 } from "recharts";
 import { useFetch } from "../lib/useFetch.js";
 import { rupee, num } from "../lib/format.js";
-import { StatCard, Card, Badge, EmptyState } from "../components/ui.jsx";
+import { StatCard, Card, Badge, EmptyState, Modal, Spinner } from "../components/ui.jsx";
 
 const PIE = ["#5E7E9B", "#5FB07C", "#D9A45B", "#D9685F", "#7FA8B8", "#9B85B0"];
+const SIZES = [["m", "M"], ["l", "L"], ["xl", "XL"], ["xxl", "XXL"], ["mxxl", "M-XXL"]];
 
 function HBars({ data, color = "#5E7E9B", fmt = num }) {
   if (!data || !data.length) return <EmptyState>No data yet</EmptyState>;
@@ -28,28 +30,40 @@ function HBars({ data, color = "#5E7E9B", fmt = num }) {
 export default function Dashboard() {
   const { data: a } = useFetch("/api/dashboard/analytics");
   const { data: s } = useFetch("/api/dashboard/summary");
+  const { data: avail } = useFetch("/api/finished-goods/availability");
+  const [designFor, setDesignFor] = useState(null);
+  const [orderFor, setOrderFor] = useState(null);
+
+  const stockBars = (avail || [])
+    .map((d) => ({ ...d, value: d.total_available }))
+    .sort((x, y) => y.value - x.value).slice(0, 8);
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="Sales This Month" value={a ? rupee(a.month_sales) : "—"} icon="₹" accent="#5E7E9B" />
-        <StatCard label="Pieces Sold" value={a ? num(a.month_qty) : "—"} icon="◷" accent="#7FA8B8" />
+      <div className="grid grid-cols-3 gap-4">
+        <StatCard label="Pieces Sold (month)" value={a ? num(a.month_qty) : "—"} icon="◷" accent="#7FA8B8" />
         <StatCard label="Orders This Month" value={a ? a.month_orders : "—"} icon="◎" accent="#D9A45B" />
-        <StatCard label="Avg Order Value" value={a ? rupee(a.avg_order_value) : "—"} icon="⌀" accent="#5FB07C" />
+        <StatCard label="Finished Goods Qty" value={s ? num(s.finished_goods_qty) : "—"} icon="◼" accent="#5FB07C" />
       </div>
 
-      <Card title="Sales — Last 30 Days">
-        <div className="h-56">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={a?.sales_trend || []}>
-              <XAxis dataKey="label" tick={{ fill: "#8E8E93", fontSize: 10 }} interval={4} axisLine={false} tickLine={false} />
-              <Tooltip cursor={{ fill: "#3A3A3C55" }}
-                       contentStyle={{ background: "#2C2C2E", border: "1px solid #48484A", borderRadius: 10, color: "#F5F5F7" }}
-                       formatter={(v) => rupee(v)} />
-              <Bar dataKey="value" fill="#5E7E9B" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+      <Card title="Designs & Stock — available pieces (tap a design for sizes)">
+        {!stockBars.length ? <EmptyState>No finished-goods stock yet</EmptyState> : (
+          <div className="space-y-2.5">
+            {stockBars.map((d, i) => {
+              const max = Math.max(...stockBars.map((x) => x.value), 1);
+              return (
+                <button key={i} onClick={() => setDesignFor(d)}
+                  className="flex w-full items-center gap-3 rounded-lg px-1 py-0.5 text-left hover:bg-surface2">
+                  <div className="w-28 shrink-0 truncate text-right text-xs text-accent">{d.name}</div>
+                  <div className="h-4 flex-1 rounded-full bg-surface2">
+                    <div className="h-4 rounded-full" style={{ width: `${(Math.max(d.value, 0) / max) * 100}%`, background: "#5FB07C" }} />
+                  </div>
+                  <div className="w-16 shrink-0 text-right text-xs font-semibold text-ink">{num(d.value, 0)}</div>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </Card>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -84,41 +98,34 @@ export default function Dashboard() {
         <Card title="Top Customers (by ₹)"><HBars data={a?.top_customers} color="#5FB07C" fmt={rupee} /></Card>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card title="This Month — Money In vs Out">
-          <HBars color="#5FB07C" fmt={rupee} data={a ? [
-            { label: "Sales", value: a.month_sales },
-            { label: "Purchases", value: a.month_purchases },
-          ] : []} />
-        </Card>
-        <Card title="Low Stock Alerts">
-          {s?.low_stock?.length ? (
-            <div className="space-y-2">
-              {s.low_stock.map((l, i) => (
-                <div key={i} className="flex items-center justify-between rounded-lg bg-warnSoft px-3 py-2">
-                  <span className="text-sm font-semibold text-warn">{l.name}</span>
-                  <span className="text-xs text-muted">{num(l.quantity, 1)} / {num(l.threshold, 1)} {l.unit}</span>
-                </div>
-              ))}
-            </div>
-          ) : <div className="py-2 text-sm text-ok">All materials well stocked ✓</div>}
-        </Card>
-      </div>
+      <Card title="Low Stock Alerts">
+        {s?.low_stock?.length ? (
+          <div className="space-y-2">
+            {s.low_stock.map((l, i) => (
+              <div key={i} className="flex items-center justify-between rounded-lg bg-warnSoft px-3 py-2">
+                <span className="text-sm font-semibold text-warn">{l.name}</span>
+                <span className="text-xs text-muted">{num(l.quantity, 1)} / {num(l.threshold, 1)} {l.unit}</span>
+              </div>
+            ))}
+          </div>
+        ) : <div className="py-2 text-sm text-ok">All materials well stocked ✓</div>}
+      </Card>
 
-      <Card title="Recent Orders">
+      <Card title="Recent Orders — tap to see delivered vs pending">
         {s?.recent_orders?.length ? (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead><tr className="text-[11px] uppercase tracking-wide text-muted">
                 <th className="py-2 pr-4">Order #</th><th className="pr-4">Customer</th>
-                <th className="pr-4">Status</th><th className="pr-4">Amount</th><th>Date</th>
+                <th className="pr-4">Status</th><th className="pr-4">Delivered</th><th className="pr-4">Amount</th><th>Date</th>
               </tr></thead>
               <tbody>
                 {s.recent_orders.map((o, i) => (
-                  <tr key={i} className="border-t border-separator/60">
-                    <td className="py-2.5 pr-4 text-ink">{o.order_number}</td>
+                  <tr key={i} className="cursor-pointer border-t border-separator/60 hover:bg-surface2" onClick={() => setOrderFor(o)}>
+                    <td className="py-2.5 pr-4 text-accent">{o.order_number}</td>
                     <td className="pr-4 text-ink2">{o.customer}</td>
                     <td className="pr-4"><Badge status={o.status} /></td>
+                    <td className="pr-4 text-ink2">{num(o.delivered_qty, 0)} / {num(o.total_qty, 0)}</td>
                     <td className="pr-4 text-ink2">{rupee(o.total_amount)}</td>
                     <td className="text-muted">{o.date}</td>
                   </tr>
@@ -128,6 +135,67 @@ export default function Dashboard() {
           </div>
         ) : <EmptyState>No orders yet</EmptyState>}
       </Card>
+
+      {designFor && <DesignStockModal design={designFor} onClose={() => setDesignFor(null)} />}
+      {orderFor && <OrderDeliveryModal order={orderFor} onClose={() => setOrderFor(null)} />}
     </div>
+  );
+}
+
+function DesignStockModal({ design, onClose }) {
+  const row = (label, obj, color) => (
+    <div className="flex items-center justify-between rounded-lg bg-surface2 px-3 py-2 text-sm">
+      <span className="text-muted">{label}</span>
+      <span className={`font-semibold ${color}`}>
+        {SIZES.map(([k, l]) => `${l}:${num(obj[k] || 0, 0)}`).join("   ")}
+      </span>
+    </div>
+  );
+  return (
+    <Modal open onClose={onClose} title={`${design.name} — Stock by Size`}>
+      <div className="space-y-2">
+        {row("Received", design.received, "text-ink")}
+        {row("Sold", design.sold, "text-warn")}
+        {row("Available", design.available, "text-ok")}
+      </div>
+      <div className="mt-3 text-right text-sm text-muted">
+        Total available: <b className="text-ok">{num(design.total_available, 0)}</b> · sold: <b className="text-ink">{num(design.total_sold, 0)}</b>
+      </div>
+      <div className="mt-4 flex justify-end"><button className="btn-ghost" onClick={onClose}>Close</button></div>
+    </Modal>
+  );
+}
+
+function OrderDeliveryModal({ order, onClose }) {
+  const { data: detail, loading } = useFetch(`/api/orders/${order.id}`);
+  const sizeStr = (it, prefix) => SIZES.filter(([k]) => (it[`qty_${k}`] || 0) > 0)
+    .map(([k, l]) => `${l}:${num(it[`${prefix}${k}`] || 0, 0)}`).join("  ") || "—";
+
+  return (
+    <Modal open onClose={onClose} title={`${order.order_number} — Delivery Status`} wide>
+      {loading || !detail ? <Spinner /> : (
+        <div className="space-y-2">
+          {detail.items.map((it) => {
+            const pending = (it.quantity || 0) - (it.delivered_qty || 0);
+            const done = pending <= 0 && it.quantity > 0;
+            return (
+              <div key={it.id} className="rounded-lg bg-surface2 px-3 py-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-ink">{it.design_no || it.product}</span>
+                  <span className={done ? "text-sm font-semibold text-ok" : "text-sm font-semibold text-warn"}>
+                    {done ? "Fully delivered" : `${num(pending, 0)} pending`}
+                  </span>
+                </div>
+                <div className="mt-1 grid grid-cols-2 gap-2 text-xs">
+                  <div className="text-muted">Delivered: <span className="text-ok">{sizeStr(it, "delivered_")}</span></div>
+                  <div className="text-muted">Ordered: <span className="text-ink2">{sizeStr(it, "qty_")}</span></div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div className="mt-4 flex justify-end"><button className="btn-ghost" onClick={onClose}>Close</button></div>
+    </Modal>
   );
 }

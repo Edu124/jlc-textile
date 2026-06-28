@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "JLC Textile Manager",
+    "slug": "jlc-textile-manager",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#1C1C1E",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.jailaxmicreation.jlctextilemanager",
+      "adaptiveIcon": {
+        "backgroundColor": "#1C1C1E",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#1C1C1E",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "180ccd0a-0c9a-4383-94fa-8667facd35d5"
+      }
+    },
+    "owner": "bshahan"
+  }
+}

@@ -51,10 +51,37 @@ def _run_migrations():
         with engine.begin() as conn:
             if "delivered_qty" not in cols:
                 conn.execute(text("ALTER TABLE order_items ADD COLUMN delivered_qty FLOAT DEFAULT 0"))
+            if "design_no" not in cols:
+                conn.execute(text("ALTER TABLE order_items ADD COLUMN design_no VARCHAR"))
             for col in ("qty_m", "qty_l", "qty_xl", "qty_xxl", "qty_mxxl",
                         "delivered_m", "delivered_l", "delivered_xl", "delivered_xxl", "delivered_mxxl"):
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE order_items ADD COLUMN {col} FLOAT DEFAULT 0"))
+    if insp.has_table("sales_bills"):
+        cols = {c["name"] for c in insp.get_columns("sales_bills")}
+        if "reference_no" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE sales_bills ADD COLUMN reference_no VARCHAR"))
+    if insp.has_table("tailor_deliveries"):
+        cols = {c["name"] for c in insp.get_columns("tailor_deliveries")}
+        with engine.begin() as conn:
+            for col in ("size_m", "size_l", "size_xl", "size_xxl", "size_mxxl"):
+                if col not in cols:
+                    conn.execute(text(f"ALTER TABLE tailor_deliveries ADD COLUMN {col} FLOAT DEFAULT 0"))
+    if insp.has_table("tailor_jobs"):
+        cols = {c["name"] for c in insp.get_columns("tailor_jobs")}
+        with engine.begin() as conn:
+            if "target_pieces" not in cols:
+                conn.execute(text("ALTER TABLE tailor_jobs ADD COLUMN target_pieces FLOAT DEFAULT 0"))
+            if "tailor_type" not in cols:
+                conn.execute(text("ALTER TABLE tailor_jobs ADD COLUMN tailor_type VARCHAR DEFAULT 'work'"))
+            if "assigned_pieces" not in cols:
+                conn.execute(text("ALTER TABLE tailor_jobs ADD COLUMN assigned_pieces FLOAT DEFAULT 0"))
+            if "parent_job_id" not in cols:
+                conn.execute(text("ALTER TABLE tailor_jobs ADD COLUMN parent_job_id INTEGER"))
+            for col in ("size_m", "size_l", "size_xl", "size_xxl", "size_mxxl"):
+                if col not in cols:
+                    conn.execute(text(f"ALTER TABLE tailor_jobs ADD COLUMN {col} FLOAT DEFAULT 0"))
 
 
 @asynccontextmanager

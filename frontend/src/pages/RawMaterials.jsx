@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import api from "../api";
 import { useFetch, apiError } from "../lib/useFetch.js";
 import { rupeeFull, num } from "../lib/format.js";
@@ -17,6 +17,12 @@ export default function RawMaterials() {
   const value = (rows || []).reduce((a, b) => a + b.value, 0);
   const low = (rows || []).filter((r) => r.status === "Low Stock").length;
 
+  const del = async (r) => {
+    if (!confirm(`Remove "${r.name}" from stock entirely?`)) return;
+    try { await api.delete(`/api/raw-materials/${r.id}`); reload(); }
+    catch (e) { alert(apiError(e)); }
+  };
+
   const columns = [
     { header: "Material", cell: (r) => (
       <button className="font-medium text-accent hover:underline" onClick={() => setDistFor(r)}>{r.name}</button>
@@ -26,7 +32,12 @@ export default function RawMaterials() {
     { header: "Avg Rate", cell: (r) => rupeeFull(r.avg_rate) },
     { header: "Value", cell: (r) => rupeeFull(r.value) },
     { header: "Status", cell: (r) => <Badge status={r.status} /> },
-    { header: "Actions", cell: (r) => <button className="text-accent" onClick={() => setAdjustFor(r)}>Adjust</button> },
+    { header: "Actions", cell: (r) => (
+      <div className="flex gap-3">
+        <button className="text-accent" onClick={() => setAdjustFor(r)}>Adjust</button>
+        <button className="text-danger" onClick={() => del(r)}>Delete</button>
+      </div>
+    )},
   ];
 
   return (
@@ -47,24 +58,52 @@ export default function RawMaterials() {
 }
 
 function AddStock({ onClose, onSaved }) {
-  const { data: materials } = useFetch("/api/material-types");
-  const [mid, setMid] = useState(""); const [qty, setQty] = useState(""); const [rate, setRate] = useState("");
+  const { data: units } = useFetch("/api/units");
+  const [name, setName] = useState("");
+  const [qty, setQty] = useState("");
+  const [unitId, setUnitId] = useState("");
+  const [rate, setRate] = useState("");
   const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
+
+  // Default the unit to Metres once units load.
+  useEffect(() => {
+    if (units && !unitId) {
+      const metres = units.find((u) => /met|mtr/i.test(u.name) || /^m$/i.test(u.abbreviation));
+      if (metres) setUnitId(String(metres.id));
+    }
+  }, [units]);
+
   const save = async () => {
-    if (!mid) return setErr("Select material");
+    if (!name.trim()) return setErr("Enter design number / name");
     if (!(Number(qty) > 0)) return setErr("Enter quantity");
     setBusy(true); setErr("");
-    try { await api.post("/api/raw-materials/stock-entry", { material_type_id: Number(mid), quantity: Number(qty), rate: Number(rate) || 0 }); onSaved(); }
-    catch (e) { setErr(apiError(e)); } finally { setBusy(false); }
+    try {
+      await api.post("/api/raw-materials/stock-entry", {
+        name: name.trim(), unit_id: unitId ? Number(unitId) : null,
+        quantity: Number(qty), rate: Number(rate) || 0 });
+      onSaved();
+    } catch (e) { setErr(apiError(e)); } finally { setBusy(false); }
   };
   return (
-    <Modal open onClose={onClose} title="Add Stock Entry">
+    <Modal open onClose={onClose} title="Add Stock">
       <div className="space-y-3">
-        <Field label="Material" required><Select value={mid} onChange={setMid}>
-          <option value="">— Select —</option>{materials?.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-        </Select></Field>
-        <Field label="Quantity" required><input className="input" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} /></Field>
-        <Field label="Rate per unit" required><input className="input" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} /></Field>
+        <Field label="Design Number / Name" required>
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. D-204 or Cotton Blue" />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Quantity" required>
+            <input className="input" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} />
+          </Field>
+          <Field label="Unit" required>
+            <Select value={unitId} onChange={setUnitId}>
+              <option value="">— Unit —</option>
+              {units?.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </Select>
+          </Field>
+        </div>
+        <Field label="Rate per unit (optional)">
+          <input className="input" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="0" />
+        </Field>
         {err && <div className="rounded-lg bg-dangerSoft px-3 py-2 text-sm text-danger">{err}</div>}
         <div className="flex justify-end gap-2"><button className="btn-ghost" onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={save} disabled={busy}>{busy ? <Spinner /> : "Add"}</button></div>
@@ -73,19 +112,26 @@ function AddStock({ onClose, onSaved }) {
   );
 }
 
+const SIZES = [["m", "M"], ["l", "L"], ["xl", "XL"], ["xxl", "XXL"], ["mxxl", "M-XXL"]];
+
 function Adjust({ row, onClose, onSaved }) {
   const [qty, setQty] = useState(String(row.quantity));
   const [reason, setReason] = useState("Given to tailor");
   const [name, setName] = useState("");
+  const [tailorType, setTailorType] = useState("work");
+  const [sizes, setSizes] = useState({ m: "", l: "", xl: "", xxl: "", mxxl: "" });
   const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
 
   const given = Math.max(0, row.quantity - (Number(qty) || 0));
+  const sizeTotal = SIZES.reduce((a, [k]) => a + (Number(sizes[k]) || 0), 0);
 
   const save = async () => {
     setBusy(true); setErr("");
+    const sizeObj = Object.fromEntries(SIZES.map(([k]) => [k, Number(sizes[k]) || 0]));
     try {
       await api.post(`/api/raw-materials/${row.id}/adjust`, {
         new_quantity: Number(qty) || 0, reason_type: reason, recipient_name: name,
+        tailor_type: tailorType, sizes: sizeTotal > 0 ? sizeObj : null,
       });
       onSaved();
     } catch (e) { setErr(apiError(e)); } finally { setBusy(false); }
@@ -101,7 +147,7 @@ function Adjust({ row, onClose, onSaved }) {
         {given > 0 && (
           <div className="rounded-lg bg-surface2 px-3 py-2 text-xs text-ink3">
             Sending out <b className="text-ink">{num(given, 2)} {row.unit}</b>
-            {reason === "Given to tailor" && " → a Production job will be created"}
+            {reason === "Given to tailor" && ` → a ${tailorType} tailor job will be created in Production`}
           </div>
         )}
         <Field label="Reason" required>
@@ -109,6 +155,29 @@ function Adjust({ row, onClose, onSaved }) {
             {REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
           </Select>
         </Field>
+        {reason === "Given to tailor" && (
+          <>
+            <Field label="Type of tailor" required>
+              <Select value={tailorType} onChange={setTailorType}>
+                <option value="work">Work (stitching — fabric → pieces)</option>
+                <option value="final">Final (finishing — pieces → finished goods)</option>
+              </Select>
+            </Field>
+            <div>
+              <label className="label">Pieces per size (optional)</label>
+              <div className="flex flex-wrap gap-2">
+                {SIZES.map(([k, lbl]) => (
+                  <div key={k} className="w-16 text-center">
+                    <div className="text-[11px] text-muted">{lbl}</div>
+                    <input className="input px-1 text-center" inputMode="numeric" value={sizes[k]}
+                           onChange={(e) => setSizes({ ...sizes, [k]: e.target.value.replace(/[^0-9]/g, "") })} />
+                  </div>
+                ))}
+              </div>
+              {sizeTotal > 0 && <div className="mt-1 text-xs text-muted">Total target: <b className="text-ink">{sizeTotal}</b> pieces</div>}
+            </div>
+          </>
+        )}
         <Field label={NAME_LABEL[reason] + " (optional)"}>
           <input className="input" value={name} onChange={(e) => setName(e.target.value)}
                  placeholder={reason === "Given to tailor" ? "e.g. Ramesh" : ""} />

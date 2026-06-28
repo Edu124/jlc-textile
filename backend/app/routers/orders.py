@@ -1,4 +1,5 @@
 from typing import Optional, List
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -72,6 +73,7 @@ def get_order(order_id: int, db: Session = Depends(get_db)):
             "delivery_date": o.delivery_date,
             "total_amount": o.total_amount, "notes": o.notes,
             "items": [{"id": it.id, "product_id": it.product_id, "product": prods.get(it.product_id, ""),
+                       "design_no": it.design_no or "",
                        "quantity": it.quantity, "rate": it.rate, "amount": it.amount,
                        "delivered_qty": it.delivered_qty or 0,
                        "has_sizes": bool((it.qty_m or 0) + (it.qty_l or 0) + (it.qty_xl or 0) + (it.qty_xxl or 0) + (it.qty_mxxl or 0)),
@@ -184,6 +186,92 @@ def deliver_item(order_id: int, item_id: int, body: DeliverIn, db: Session = Dep
     _recompute_status(db, o)
     db.commit()
     return {"ok": True, "status": o.status}
+
+
+SIZE_KEYS = ["m", "l", "xl", "xxl", "mxxl"]
+
+
+class DeliverLogIn(BaseModel):
+    delivery_date: Optional[str] = None
+    m: float = 0
+    l: float = 0
+    xl: float = 0
+    xxl: float = 0
+    mxxl: float = 0
+    notes: Optional[str] = ""
+
+
+@router.post("/{order_id}/items/{item_id}/deliver-log")
+def add_delivery_log(order_id: int, item_id: int, body: DeliverLogIn, db: Session = Depends(get_db)):
+    """Record a dated delivery of some pieces against one order line. The values
+    are the amount delivered NOW (a delta); running totals live on the item."""
+    o = db.query(models.Order).get(order_id)
+    if not o: raise HTTPException(404, "Order not found")
+    it = db.query(models.OrderItem).filter_by(id=item_id, order_id=order_id).first()
+    if not it: raise HTTPException(404, "Item not found")
+
+    deltas = {k: max(0.0, getattr(body, k) or 0) for k in SIZE_KEYS}
+    total = sum(deltas.values())
+    if total <= 0:
+        raise HTTPException(400, "Enter pieces delivered")
+    # Validate against remaining per size (or, for no-size items, the total).
+    has_sizes = any((getattr(it, f"qty_{k}") or 0) for k in SIZE_KEYS)
+    if has_sizes:
+        for k in SIZE_KEYS:
+            ordered = getattr(it, f"qty_{k}") or 0
+            already = getattr(it, f"delivered_{k}") or 0
+            if already + deltas[k] > ordered:
+                raise HTTPException(400, f"{k.upper()}: only {ordered - already:.0f} left to deliver")
+        for k in SIZE_KEYS:
+            setattr(it, f"delivered_{k}", (getattr(it, f"delivered_{k}") or 0) + deltas[k])
+        it.delivered_qty = sum(getattr(it, f"delivered_{k}") or 0 for k in SIZE_KEYS)
+    else:
+        if (it.delivered_qty or 0) + total > (it.quantity or 0):
+            raise HTTPException(400, f"Only {(it.quantity or 0) - (it.delivered_qty or 0):.0f} left to deliver")
+        it.delivered_qty = (it.delivered_qty or 0) + total
+
+    db.add(models.OrderDelivery(
+        order_id=order_id, order_item_id=item_id, design_no=it.design_no,
+        delivery_date=body.delivery_date or date.today().isoformat(), pieces=total,
+        size_m=deltas["m"], size_l=deltas["l"], size_xl=deltas["xl"],
+        size_xxl=deltas["xxl"], size_mxxl=deltas["mxxl"], notes=(body.notes or "").strip()))
+    _recompute_status(db, o)
+    db.commit()
+    return {"ok": True, "status": o.status}
+
+
+@router.get("/{order_id}/deliveries")
+def list_order_deliveries(order_id: int, db: Session = Depends(get_db)):
+    rows = (db.query(models.OrderDelivery).filter_by(order_id=order_id)
+            .order_by(models.OrderDelivery.id.desc()).all())
+    return [{"id": d.id, "order_item_id": d.order_item_id, "design_no": d.design_no,
+             "date": d.delivery_date, "pieces": d.pieces or 0, "notes": d.notes or "",
+             "sizes": {k: getattr(d, f"size_{k}") or 0 for k in SIZE_KEYS}}
+            for d in rows]
+
+
+@router.delete("/{order_id}/deliveries/{delivery_id}")
+def delete_order_delivery(order_id: int, delivery_id: int, db: Session = Depends(get_db)):
+    """Undo a delivery log entry — subtracts its pieces back off the running totals."""
+    d = db.query(models.OrderDelivery).filter_by(id=delivery_id, order_id=order_id).first()
+    if not d:
+        return {"ok": True}
+    it = db.query(models.OrderItem).get(d.order_item_id) if d.order_item_id else None
+    if it:
+        for k in SIZE_KEYS:
+            cur = getattr(it, f"delivered_{k}") or 0
+            setattr(it, f"delivered_{k}", max(0.0, cur - (getattr(d, f"size_{k}") or 0)))
+        has_sizes = any((getattr(it, f"qty_{k}") or 0) for k in SIZE_KEYS)
+        if has_sizes:
+            it.delivered_qty = sum(getattr(it, f"delivered_{k}") or 0 for k in SIZE_KEYS)
+        else:
+            it.delivered_qty = max(0.0, (it.delivered_qty or 0) - (d.pieces or 0))
+    db.delete(d)
+    o = db.query(models.Order).get(order_id)
+    if o:
+        _recompute_status(db, o)
+    db.commit()
+    return {"ok": True}
 
 
 @router.delete("/{order_id}")

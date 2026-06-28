@@ -1,5 +1,5 @@
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, date
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -11,6 +11,14 @@ router = APIRouter(prefix="/api/production", tags=["production"],
                    dependencies=[Depends(require_user)])
 
 STAGES = ["Cutting", "Stitching", "Dyeing", "Finishing", "QC", "Completed"]
+
+
+class SizeBreakdown(BaseModel):
+    m: float = 0
+    l: float = 0
+    xl: float = 0
+    xxl: float = 0
+    mxxl: float = 0
 
 
 @router.get("/next-number")
@@ -141,11 +149,30 @@ def _job_dict(db, j):
             pending = p.pending_qty or 0
             fg = db.query(models.FinishedGoodsStock).filter_by(product_id=p.id).first()
             finished = fg.quantity if fg else 0
+    target = j.target_pieces or 0
+    delivered = sum(d.pieces or 0 for d in
+                    db.query(models.TailorDelivery).filter_by(job_id=j.id).all())
+    assigned = j.assigned_pieces or 0
     return {"id": j.id, "material": mat.name if mat else "", "material_id": j.material_type_id,
-            "tailor": j.tailor_name, "unit": unit.abbreviation if unit else "",
+            "tailor": j.tailor_name, "tailor_type": j.tailor_type or "work",
+            "unit": unit.abbreviation if unit else "",
             "qty_given": given, "qty_returned": returned, "held": max(0, given - returned),
             "pending_qty": pending, "finished_qty": finished, "product_id": j.product_id,
+            "target_pieces": target, "delivered_pieces": delivered,
+            "remaining_pieces": max(0, target - delivered),
+            "assigned_pieces": assigned, "ready_to_assign": max(0, delivered - assigned),
+            "parent_job_id": j.parent_job_id,
+            "sizes": {"m": j.size_m or 0, "l": j.size_l or 0, "xl": j.size_xl or 0,
+                      "xxl": j.size_xxl or 0, "mxxl": j.size_mxxl or 0},
             "created_at": j.created_at.isoformat()[:10] if j.created_at else ""}
+
+
+def _delivery_dict(d):
+    return {"id": d.id, "delivery_date": d.delivery_date, "pieces": d.pieces or 0,
+            "image": d.image_path, "notes": d.notes or "",
+            "sizes": {"m": d.size_m or 0, "l": d.size_l or 0, "xl": d.size_xl or 0,
+                      "xxl": d.size_xxl or 0, "mxxl": d.size_mxxl or 0},
+            "created_at": d.created_at.isoformat()[:16] if d.created_at else ""}
 
 
 @router.get("/jobs")
@@ -193,5 +220,143 @@ def delete_job(job_id: int, db: Session = Depends(get_db)):
     # that stock is real and shouldn't disappear because the job row is gone.
     j = db.query(models.TailorJob).get(job_id)
     if j:
+        db.query(models.TailorDelivery).filter_by(job_id=job_id).delete()
         db.delete(j); db.commit()
+    return {"ok": True}
+
+
+# ── Tailor targets & dated piece deliveries (with reference photos) ───────────
+
+class TargetIn(BaseModel):
+    target_pieces: float
+
+
+@router.post("/jobs/{job_id}/target")
+def set_target(job_id: int, body: TargetIn, db: Session = Depends(get_db)):
+    j = db.query(models.TailorJob).get(job_id)
+    if not j:
+        raise HTTPException(404, "Not found")
+    if body.target_pieces < 0:
+        raise HTTPException(400, "Target cannot be negative")
+    j.target_pieces = body.target_pieces
+    db.commit()
+    return _job_dict(db, j)
+
+
+@router.get("/jobs/{job_id}/deliveries")
+def list_deliveries(job_id: int, db: Session = Depends(get_db)):
+    rows = (db.query(models.TailorDelivery).filter_by(job_id=job_id)
+            .order_by(models.TailorDelivery.id.desc()).all())
+    return [_delivery_dict(d) for d in rows]
+
+
+def _pieces_unit_id(db: Session):
+    u = (db.query(models.Unit)
+         .filter((models.Unit.abbreviation.ilike("pcs")) | (models.Unit.name.ilike("Pieces")))
+         .first())
+    return u.id if u else None
+
+
+def _get_or_create_finished_product(db: Session, name: str):
+    """Final-tailor pieces land as a finished-goods Product, matched by design
+    name (auto-created if new). The client can rename it / add an image after."""
+    p = (db.query(models.Product)
+         .filter(models.Product.is_active == 1, models.Product.name.ilike(name)).first())
+    if p:
+        return p
+    p = models.Product(name=name, unit_id=_pieces_unit_id(db), sale_rate=0, is_active=1)
+    db.add(p); db.flush()
+    return p
+
+
+class DeliveryIn(BaseModel):
+    delivery_date: Optional[str] = None
+    pieces: float = 0
+    sizes: Optional[SizeBreakdown] = None   # optional per-size breakdown
+    image_base64: Optional[str] = None   # data URL, optional reference photo
+    notes: Optional[str] = ""
+
+
+@router.post("/jobs/{job_id}/deliveries")
+def add_delivery(job_id: int, body: DeliveryIn, db: Session = Depends(get_db)):
+    j = db.query(models.TailorJob).get(job_id)
+    if not j:
+        raise HTTPException(404, "Not found")
+    s = body.sizes
+    size_total = (s.m + s.l + s.xl + s.xxl + s.mxxl) if s else 0
+    pieces = size_total if size_total > 0 else body.pieces
+    if pieces <= 0:
+        raise HTTPException(400, "Pieces must be greater than 0")
+    d = models.TailorDelivery(
+        job_id=job_id, delivery_date=body.delivery_date or date.today().isoformat(),
+        pieces=pieces, image_path=body.image_base64, notes=(body.notes or "").strip(),
+        size_m=s.m if s else 0, size_l=s.l if s else 0, size_xl=s.xl if s else 0,
+        size_xxl=s.xxl if s else 0, size_mxxl=s.mxxl if s else 0)
+    db.add(d)
+
+    # Pieces returned from a FINAL tailor become finished goods straight away.
+    if (j.tailor_type or "work") == "final":
+        mat = db.query(models.RawMaterialType).get(j.material_type_id)
+        prod = _get_or_create_finished_product(db, mat.name if mat else f"Design {job_id}")
+        if not j.product_id:
+            j.product_id = prod.id
+        # carry the reference photo onto the product if it has none yet
+        if body.image_base64 and not prod.image_path:
+            prod.image_path = body.image_base64
+        services.adjust_finished_stock(db, prod.id, pieces)
+        db.add(models.FinishedGoodsTransaction(
+            product_id=prod.id, transaction_type="from_final_tailor", quantity=pieces,
+            reference_id=job_id, reference_type="tailor_job"))
+
+    db.commit(); db.refresh(d)
+    return _delivery_dict(d)
+
+
+class AssignFinalIn(BaseModel):
+    tailor_name: str
+    pieces: float = 0
+    sizes: Optional[SizeBreakdown] = None
+
+
+@router.post("/jobs/{job_id}/assign-final")
+def assign_to_final(job_id: int, body: AssignFinalIn, db: Session = Depends(get_db)):
+    """Hand a batch of work-tailor pieces onward to a final tailor. Creates a
+    new 'final' job carved out of this work job's ready-to-assign pieces.
+    A per-size breakdown can be given; if so the total is the sum of sizes."""
+    w = db.query(models.TailorJob).get(job_id)
+    if not w:
+        raise HTTPException(404, "Not found")
+    if (w.tailor_type or "work") != "work":
+        raise HTTPException(400, "Only work-tailor jobs can be assigned onward")
+    if not body.tailor_name.strip():
+        raise HTTPException(400, "Enter the final tailor's name")
+
+    s = body.sizes
+    size_total = (s.m + s.l + s.xl + s.xxl + s.mxxl) if s else 0
+    pieces = size_total if size_total > 0 else body.pieces
+    if pieces <= 0:
+        raise HTTPException(400, "Enter pieces to assign")
+
+    delivered = sum(d.pieces or 0 for d in db.query(models.TailorDelivery).filter_by(job_id=job_id).all())
+    ready = delivered - (w.assigned_pieces or 0)
+    if pieces > ready:
+        raise HTTPException(400, f"Only {ready:.0f} pieces ready to assign")
+
+    f = models.TailorJob(
+        material_type_id=w.material_type_id, tailor_name=body.tailor_name.strip(),
+        tailor_type="final", qty_given=pieces, qty_returned=0,
+        target_pieces=pieces, parent_job_id=w.id,
+        size_m=s.m if s else 0, size_l=s.l if s else 0, size_xl=s.xl if s else 0,
+        size_xxl=s.xxl if s else 0, size_mxxl=s.mxxl if s else 0)
+    db.add(f)
+    w.assigned_pieces = (w.assigned_pieces or 0) + pieces
+    db.commit(); db.refresh(f)
+    return _job_dict(db, f)
+
+
+@router.delete("/jobs/{job_id}/deliveries/{delivery_id}")
+def delete_delivery(job_id: int, delivery_id: int, db: Session = Depends(get_db)):
+    d = db.query(models.TailorDelivery).filter_by(id=delivery_id, job_id=job_id).first()
+    if d:
+        db.delete(d); db.commit()
     return {"ok": True}

@@ -29,31 +29,61 @@ def list_stock(db: Session = Depends(get_db)):
 
 
 class StockEntryIn(BaseModel):
-    material_type_id: int
+    name: str                       # design number / name
+    unit_id: Optional[int] = None   # metres / pieces / etc.
     quantity: float
-    rate: float
+    rate: float = 0
     note: Optional[str] = ""
+
+
+def _get_or_create_type(db: Session, name: str, unit_id):
+    """Stock is added by free-text design name now (no separate material-type
+    master). Same name reuses one stock line; new names create one."""
+    name = name.strip()
+    existing = (db.query(models.RawMaterialType)
+                .filter(models.RawMaterialType.name.ilike(name)).first())
+    if existing:
+        if unit_id and not existing.unit_id:
+            existing.unit_id = unit_id
+        return existing
+    m = models.RawMaterialType(name=name, unit_id=unit_id)
+    db.add(m); db.flush()
+    return m
 
 
 @router.post("/stock-entry")
 def add_stock(body: StockEntryIn, db: Session = Depends(get_db)):
+    if not body.name.strip():
+        raise HTTPException(400, "Enter a design number / name")
     if body.quantity <= 0:
         raise HTTPException(400, "Quantity must be greater than 0")
-    services.adjust_raw_stock(db, body.material_type_id, body.quantity, body.rate)
+    m = _get_or_create_type(db, body.name, body.unit_id)
+    services.adjust_raw_stock(db, m.id, body.quantity, body.rate)
     db.add(models.RawMaterialTransaction(
-        material_type_id=body.material_type_id, transaction_type="manual_addition",
+        material_type_id=m.id, transaction_type="manual_addition",
         quantity=body.quantity, rate=body.rate, reference_type="manual", notes=body.note))
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "material_type_id": m.id}
 
 
 REASONS = ["Given to tailor", "Given to customer", "Other"]
+TAILOR_TYPES = ["work", "final"]
+
+
+class SizeBreakdown(BaseModel):
+    m: float = 0
+    l: float = 0
+    xl: float = 0
+    xxl: float = 0
+    mxxl: float = 0
 
 
 class AdjustIn(BaseModel):
     new_quantity: float
     reason_type: str = "Other"
     recipient_name: Optional[str] = ""
+    tailor_type: str = "work"        # only used when reason_type == "Given to tailor"
+    sizes: Optional[SizeBreakdown] = None   # optional per-size piece breakdown
 
 
 @router.post("/{material_type_id}/adjust")
@@ -76,13 +106,33 @@ def adjust(material_type_id: int, body: AdjustIn, db: Session = Depends(get_db))
         quantity=delta, reference_type="adjustment",
         recipient_type=body.reason_type, recipient_name=(body.recipient_name or "").strip()))
 
-    # "Given to tailor" creates a job-work record in Production.
+    # "Given to tailor" creates a job-work record in Production. The tailor
+    # type (work | final) decides which stage of the pipeline it enters.
     if body.reason_type == "Given to tailor" and given > 0:
+        ttype = body.tailor_type if body.tailor_type in TAILOR_TYPES else "work"
+        s = body.sizes
+        size_total = (s.m + s.l + s.xl + s.xxl + s.mxxl) if s else 0
+        # For work jobs the optional size breakdown also seeds the piece target.
+        target = size_total if size_total > 0 else (given if ttype == "final" else 0)
         db.add(models.TailorJob(
             material_type_id=material_type_id,
             tailor_name=(body.recipient_name or "").strip() or "Tailor",
-            qty_given=given, qty_returned=0))
+            tailor_type=ttype, qty_given=given, qty_returned=0, target_pieces=target,
+            size_m=s.m if s else 0, size_l=s.l if s else 0, size_xl=s.xl if s else 0,
+            size_xxl=s.xxl if s else 0, size_mxxl=s.mxxl if s else 0))
 
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/{material_type_id}")
+def delete_material(material_type_id: int, db: Session = Depends(get_db)):
+    """Remove a raw-material/design stock line entirely (stock + history)."""
+    db.query(models.RawMaterialStock).filter_by(material_type_id=material_type_id).delete()
+    db.query(models.RawMaterialTransaction).filter_by(material_type_id=material_type_id).delete()
+    m = db.query(models.RawMaterialType).get(material_type_id)
+    if m:
+        db.delete(m)
     db.commit()
     return {"ok": True}
 
