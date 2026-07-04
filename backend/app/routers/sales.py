@@ -128,9 +128,29 @@ def create_bill(body: SalesBillIn, db: Session = Depends(get_db)):
             qty_mxxl=it.qty_mxxl, row_qty=row_qty, mrp=rep_mrp, amount=amount,
             rate_m=rates["rate_m"], rate_l=rates["rate_l"], rate_xl=rates["rate_xl"],
             rate_xxl=rates["rate_xxl"], rate_mxxl=rates["rate_mxxl"]))
+        _deduct_stock(db, it.product_id, row_qty, bill.id)
     services.sync_order_from_bill(db, bill, prepared)
     db.commit()
     return {"id": bill.id, "bill_number": bill.bill_number}
+
+
+def _deduct_stock(db: Session, product_id, row_qty, bill_id):
+    """Sold pieces leave finished-goods stock immediately."""
+    if product_id and row_qty > 0:
+        services.adjust_finished_stock(db, product_id, -row_qty)
+        db.add(models.FinishedGoodsTransaction(
+            product_id=product_id, transaction_type="sale", quantity=-row_qty,
+            reference_id=bill_id, reference_type="sales_bill"))
+
+
+def _restore_stock(db: Session, bill_id, reason):
+    """Put a bill's pieces back into finished goods (bill edited or deleted)."""
+    for old in db.query(models.SalesBillItem).filter_by(bill_id=bill_id).all():
+        if old.product_id and (old.row_qty or 0) > 0:
+            services.adjust_finished_stock(db, old.product_id, old.row_qty or 0)
+            db.add(models.FinishedGoodsTransaction(
+                product_id=old.product_id, transaction_type=reason, quantity=old.row_qty or 0,
+                reference_id=bill_id, reference_type="sales_bill"))
 
 
 @router.put("/{bill_id}")
@@ -170,6 +190,7 @@ def update_bill(bill_id: int, body: SalesBillIn, db: Session = Depends(get_db)):
     bill.total_qty = total_qty
     bill.total_amount = total_amt
 
+    _restore_stock(db, bill.id, "sale_edit")
     db.query(models.SalesBillItem).filter_by(bill_id=bill.id).delete()
     for it, row_qty, amount, rates, rep_mrp in prepared:
         db.add(models.SalesBillItem(
@@ -178,6 +199,7 @@ def update_bill(bill_id: int, body: SalesBillIn, db: Session = Depends(get_db)):
             qty_mxxl=it.qty_mxxl, row_qty=row_qty, mrp=rep_mrp, amount=amount,
             rate_m=rates["rate_m"], rate_l=rates["rate_l"], rate_xl=rates["rate_xl"],
             rate_xxl=rates["rate_xxl"], rate_mxxl=rates["rate_mxxl"]))
+        _deduct_stock(db, it.product_id, row_qty, bill.id)
     services.sync_order_from_bill(db, bill, prepared)
     db.commit()
     return {"id": bill.id, "bill_number": bill.bill_number}
@@ -199,6 +221,7 @@ def bill_pdf(bill_id: int, amounts: int = 0, ref: int = 1, delivery: int = 1,
 
 @router.delete("/{bill_id}")
 def delete_bill(bill_id: int, db: Session = Depends(get_db)):
+    _restore_stock(db, bill_id, "sale_deleted")
     db.query(models.SalesBillItem).filter_by(bill_id=bill_id).delete()
     b = db.query(models.SalesBill).get(bill_id)
     if b:

@@ -89,6 +89,23 @@ def _run_migrations():
                     conn.execute(text(f"ALTER TABLE tailor_jobs ADD COLUMN {col} FLOAT DEFAULT 0"))
 
 
+def _backfill_sales_stock(db):
+    """One-time: sales made before stock deduction existed get deducted now,
+    so Finished Goods reflects what's actually left. Flag-guarded."""
+    from . import services
+    if services.get_setting(db, "sales_stock_reconciled", "") == "1":
+        return
+    for it in db.query(models.SalesBillItem).all():
+        if it.product_id and (it.row_qty or 0) > 0:
+            services.adjust_finished_stock(db, it.product_id, -(it.row_qty or 0))
+            db.add(models.FinishedGoodsTransaction(
+                product_id=it.product_id, transaction_type="sale_backfill",
+                quantity=-(it.row_qty or 0), reference_id=it.bill_id,
+                reference_type="sales_bill"))
+    services.set_setting(db, "sales_stock_reconciled", "1")
+    db.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create tables, run migrations, seed defaults on startup.
@@ -97,6 +114,7 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         seed_defaults(db)
+        _backfill_sales_stock(db)
     finally:
         db.close()
     yield
