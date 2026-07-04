@@ -101,7 +101,10 @@ def summary(db: Session = Depends(get_db)):
         items = db.query(models.OrderItem).filter_by(order_id=o.id).all()
         tq = sum(it.quantity or 0 for it in items)
         dq = sum(it.delivered_qty or 0 for it in items)
-        recent.append({"id": o.id, "order_number": o.order_number, "customer": cust.name if cust else "",
+        # The client works by the bill's reference number, not the auto order no.
+        bill = db.query(models.SalesBill).filter_by(order_id=o.id).first()
+        ref = (bill.reference_no if bill and bill.reference_no else "") or o.order_number
+        recent.append({"id": o.id, "order_number": ref, "customer": cust.name if cust else "",
                        "status": o.status, "total_amount": o.total_amount,
                        "total_qty": tq, "delivered_qty": dq,
                        "date": o.created_at.isoformat()[:10] if o.created_at else ""})

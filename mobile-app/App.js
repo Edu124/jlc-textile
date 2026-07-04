@@ -1,8 +1,10 @@
 import { useRef, useState, useCallback } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, View, BackHandler, ActivityIndicator, Text, SafeAreaView } from 'react-native';
+import { StyleSheet, View, BackHandler, ActivityIndicator, Text, SafeAreaView, Alert } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useEffect } from 'react';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 
 // The whole app lives on Railway — this is just a thin native shell around it.
 // Update the deployed site any time; nothing here needs to change or rebuild.
@@ -32,6 +34,31 @@ export default function App() {
     webviewRef.current?.reload();
   }, []);
 
+  // The web app posts generated files (bill PDFs, backups) here because the
+  // WebView can't download blobs itself. Save to cache and open the share
+  // sheet so the client can save, print, or WhatsApp the file.
+  const onMessage = useCallback(async (event) => {
+    try {
+      const msg = JSON.parse(event.nativeEvent.data);
+      if (msg.type !== 'save-file' || !msg.base64) return;
+      const safeName = (msg.filename || 'document.pdf').replace(/[^\w.\-]/g, '_');
+      const path = FileSystem.cacheDirectory + safeName;
+      await FileSystem.writeAsStringAsync(path, msg.base64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(path, {
+          mimeType: msg.mime || 'application/pdf',
+          dialogTitle: safeName,
+        });
+      } else {
+        Alert.alert('Saved', `File saved as ${safeName}`);
+      }
+    } catch (e) {
+      Alert.alert('Could not open the file', String(e?.message || e));
+    }
+  }, []);
+
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar style="light" backgroundColor="#1C1C1E" />
@@ -46,6 +73,7 @@ export default function App() {
           ref={webviewRef}
           source={{ uri: APP_URL }}
           style={styles.webview}
+          onMessage={onMessage}
           onNavigationStateChange={(nav) => setCanGoBack(nav.canGoBack)}
           onLoadEnd={() => setLoading(false)}
           onError={() => { setError(true); setLoading(false); }}

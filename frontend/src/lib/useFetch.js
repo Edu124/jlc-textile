@@ -29,11 +29,29 @@ export function apiError(e) {
   return e?.response?.data?.detail || e?.message || "Something went wrong";
 }
 
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1]);
+    r.onerror = reject;
+    r.readAsDataURL(blob);
+  });
+}
+
+// Inside the Android app the WebView can't open or download blob files — hand
+// the file to the native shell instead, which opens the share/save sheet.
+async function sendToApp(blob, filename, mime) {
+  const base64 = await blobToBase64(blob);
+  window.ReactNativeWebView.postMessage(JSON.stringify({ type: "save-file", filename, mime, base64 }));
+}
+
 // window.open(path) can't carry the Bearer auth header, so the API 401s
 // silently. Fetch the PDF as a blob (with auth) and open that instead.
-export async function openPdf(path) {
+export async function openPdf(path, filename = "order-form.pdf") {
   const res = await api.get(path, { responseType: "blob" });
-  const url = URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
+  const blob = new Blob([res.data], { type: "application/pdf" });
+  if (window.ReactNativeWebView) return sendToApp(blob, filename, "application/pdf");
+  const url = URL.createObjectURL(blob);
   window.open(url, "_blank");
 }
 
@@ -69,6 +87,8 @@ export function useAmountLock() {
 // and trigger a save via a temporary <a download>.
 export async function downloadFile(path, filename) {
   const res = await api.get(path, { responseType: "blob" });
+  if (window.ReactNativeWebView)
+    return sendToApp(res.data, filename, res.data.type || "application/octet-stream");
   const url = URL.createObjectURL(res.data);
   const a = document.createElement("a");
   a.href = url; a.download = filename;

@@ -23,6 +23,7 @@ const NAV = [
     ["AI Studio", "/ai", "✦"],
     ["Reports", "/reports", "≡"],
     ["Settings", "/settings", "⚙"],
+    ["Import Customers", "/import-customers", "⬆"],
   ]},
 ];
 

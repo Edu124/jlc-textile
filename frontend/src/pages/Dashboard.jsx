@@ -2,30 +2,12 @@ import { useState } from "react";
 import {
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip,
 } from "recharts";
-import { useFetch } from "../lib/useFetch.js";
+import { useFetch, useAmountLock } from "../lib/useFetch.js";
 import { rupee, num } from "../lib/format.js";
 import { StatCard, Card, Badge, EmptyState, Modal, Spinner } from "../components/ui.jsx";
 
 const PIE = ["#5E7E9B", "#5FB07C", "#D9A45B", "#D9685F", "#7FA8B8", "#9B85B0"];
 const SIZES = [["m", "M"], ["l", "L"], ["xl", "XL"], ["xxl", "XXL"], ["mxxl", "M-XXL"]];
-
-function HBars({ data, color = "#5E7E9B", fmt = num }) {
-  if (!data || !data.length) return <EmptyState>No data yet</EmptyState>;
-  const max = Math.max(...data.map((d) => d.value), 1);
-  return (
-    <div className="space-y-2.5">
-      {data.map((d, i) => (
-        <div key={i} className="flex items-center gap-3">
-          <div className="w-24 shrink-0 truncate text-right text-xs text-ink2">{d.label}</div>
-          <div className="h-4 flex-1 rounded-full bg-surface2">
-            <div className="h-4 rounded-full" style={{ width: `${(d.value / max) * 100}%`, background: color }} />
-          </div>
-          <div className="w-16 shrink-0 text-right text-xs font-semibold text-ink">{fmt(d.value)}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 export default function Dashboard() {
   const { data: a } = useFetch("/api/dashboard/analytics");
@@ -33,10 +15,17 @@ export default function Dashboard() {
   const { data: avail } = useFetch("/api/finished-goods/availability");
   const [designFor, setDesignFor] = useState(null);
   const [orderFor, setOrderFor] = useState(null);
+  const [soldFor, setSoldFor] = useState(null);
+  const { unlocked, unlock } = useAmountLock();
 
   const stockBars = (avail || [])
     .map((d) => ({ ...d, value: d.total_available }))
     .sort((x, y) => y.value - x.value).slice(0, 8);
+
+  const soldBars = (avail || [])
+    .filter((d) => d.total_sold > 0)
+    .map((d) => ({ ...d, value: d.total_sold }))
+    .sort((x, y) => y.value - x.value).slice(0, 10);
 
   return (
     <div className="space-y-5">
@@ -93,9 +82,25 @@ export default function Dashboard() {
           ) : <EmptyState>No orders yet</EmptyState>}
         </Card>
 
-        <Card title="Size Mix (pieces sold)"><HBars data={a?.size_mix} color="#7FA8B8" /></Card>
-        <Card title="Top Designs (by qty)"><HBars data={a?.top_designs} /></Card>
-        <Card title="Top Customers (by ₹)"><HBars data={a?.top_customers} color="#5FB07C" fmt={rupee} /></Card>
+        <Card title="Designs Sold — tap a design to see which sizes sold">
+          {!soldBars.length ? <EmptyState>Nothing sold yet</EmptyState> : (
+            <div className="space-y-2.5">
+              {soldBars.map((d, i) => {
+                const max = Math.max(...soldBars.map((x) => x.value), 1);
+                return (
+                  <button key={i} onClick={() => setSoldFor(d)}
+                    className="flex w-full items-center gap-3 rounded-lg px-1 py-0.5 text-left hover:bg-surface2">
+                    <div className="w-28 shrink-0 truncate text-right text-xs text-accent">{d.name}</div>
+                    <div className="h-4 flex-1 rounded-full bg-surface2">
+                      <div className="h-4 rounded-full" style={{ width: `${(d.value / max) * 100}%`, background: "#7FA8B8" }} />
+                    </div>
+                    <div className="w-12 shrink-0 text-right text-xs font-semibold text-ink">{num(d.value, 0)}</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </Card>
       </div>
 
       <Card title="Low Stock Alerts">
@@ -126,7 +131,12 @@ export default function Dashboard() {
                     <td className="pr-4 text-ink2">{o.customer}</td>
                     <td className="pr-4"><Badge status={o.status} /></td>
                     <td className="pr-4 text-ink2">{num(o.delivered_qty, 0)} / {num(o.total_qty, 0)}</td>
-                    <td className="pr-4 text-ink2">{rupee(o.total_amount)}</td>
+                    <td className="pr-4 text-ink2">
+                      {unlocked ? rupee(o.total_amount) : (
+                        <button className="text-muted hover:text-accent"
+                                onClick={(e) => { e.stopPropagation(); unlock(); }}>***</button>
+                      )}
+                    </td>
                     <td className="text-muted">{o.date}</td>
                   </tr>
                 ))}
@@ -138,7 +148,31 @@ export default function Dashboard() {
 
       {designFor && <DesignStockModal design={designFor} onClose={() => setDesignFor(null)} />}
       {orderFor && <OrderDeliveryModal order={orderFor} onClose={() => setOrderFor(null)} />}
+      {soldFor && <DesignSoldModal design={soldFor} onClose={() => setSoldFor(null)} />}
     </div>
+  );
+}
+
+function DesignSoldModal({ design, onClose }) {
+  const max = Math.max(...SIZES.map(([k]) => design.sold[k] || 0), 1);
+  return (
+    <Modal open onClose={onClose} title={`${design.name} — Sizes Sold`}>
+      <div className="space-y-2.5">
+        {SIZES.map(([k, lbl]) => (
+          <div key={k} className="flex items-center gap-3">
+            <div className="w-14 shrink-0 text-right text-xs text-ink2">{lbl}</div>
+            <div className="h-4 flex-1 rounded-full bg-surface2">
+              <div className="h-4 rounded-full" style={{ width: `${((design.sold[k] || 0) / max) * 100}%`, background: "#7FA8B8" }} />
+            </div>
+            <div className="w-10 shrink-0 text-right text-xs font-semibold text-ink">{num(design.sold[k] || 0, 0)}</div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 text-right text-sm text-muted">
+        Total sold: <b className="text-ink">{num(design.total_sold, 0)}</b> pcs
+      </div>
+      <div className="mt-4 flex justify-end"><button className="btn-ghost" onClick={onClose}>Close</button></div>
+    </Modal>
   );
 }
 

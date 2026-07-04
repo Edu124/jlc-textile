@@ -1,5 +1,7 @@
+import csv
+import io
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from ..db import get_db
@@ -111,6 +113,84 @@ def _make_party_routes(path, Model):
 
 _make_party_routes("suppliers", models.Supplier)
 _make_party_routes("customers", models.Customer)
+
+
+# Which spreadsheet headings map to which customer field.
+IMPORT_HEADERS = {
+    "name": ["name", "customer", "party", "shop", "company"],
+    "phone": ["phone", "mobile", "contact", "mob", "number"],
+    "email": ["email", "e-mail", "mail"],
+    "address": ["address", "add.", "city", "location", "area"],
+    "gst_number": ["gst", "gstin"],
+}
+
+
+@router.post("/customers/import")
+async def import_customers(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Bulk-add customers from an Excel (.xlsx) or CSV file. The first row can
+    be headings (Name / Phone / Email / Address / GST in any order); without
+    headings the columns are taken as: Name, Phone, Email, Address, GST."""
+    fname = (file.filename or "").lower()
+    content = await file.read()
+
+    rows = []
+    if fname.endswith((".xlsx", ".xlsm")):
+        from openpyxl import load_workbook
+        try:
+            wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        except Exception:
+            raise HTTPException(400, "Could not read this Excel file — save it as .xlsx and try again")
+        for r in wb.active.iter_rows(values_only=True):
+            rows.append(["" if c is None else str(c).strip() for c in r])
+    elif fname.endswith(".csv"):
+        text = content.decode("utf-8-sig", errors="replace")
+        rows = [[(c or "").strip() for c in r] for r in csv.reader(io.StringIO(text))]
+    else:
+        raise HTTPException(400, "Upload an Excel (.xlsx) or CSV file")
+
+    rows = [r for r in rows if any(c for c in r)]
+    if not rows:
+        raise HTTPException(400, "The file is empty")
+
+    # Detect a heading row and map columns; otherwise use positional order.
+    col_map = {}
+    for idx, cell in enumerate([c.lower() for c in rows[0]]):
+        if not cell:
+            continue
+        for field, keys in IMPORT_HEADERS.items():
+            if field not in col_map.values() and any(k in cell for k in keys):
+                col_map[idx] = field
+                break
+    if col_map:
+        data = rows[1:]
+    else:
+        col_map = {0: "name", 1: "phone", 2: "email", 3: "address", 4: "gst_number"}
+        data = rows
+
+    existing = {c.name.strip().lower() for c in
+                db.query(models.Customer).filter(models.Customer.is_active == 1).all()}
+    added, dup, invalid, added_names = 0, 0, 0, []
+    for r in data:
+        rec = {f: "" for f in IMPORT_HEADERS}
+        for idx, field in col_map.items():
+            if idx < len(r):
+                rec[field] = r[idx]
+        name = rec["name"].strip()
+        if not name:
+            invalid += 1
+            continue
+        if name.lower() in existing:
+            dup += 1
+            continue
+        db.add(models.Customer(name=name, phone=rec["phone"], email=rec["email"],
+                               address=rec["address"], gst_number=rec["gst_number"].upper()))
+        existing.add(name.lower())
+        added += 1
+        if len(added_names) < 100:
+            added_names.append(name)
+    db.commit()
+    return {"added": added, "skipped_duplicate": dup, "skipped_no_name": invalid,
+            "names": added_names}
 
 
 @router.get("/customers/{pid}/summary")

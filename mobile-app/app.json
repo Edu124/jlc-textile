@@ -2,7 +2,7 @@
   "expo": {
     "name": "JLC Textile Manager",
     "slug": "jlc-textile-manager",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -12,6 +12,7 @@
     },
     "android": {
       "package": "com.jailaxmicreation.jlctextilemanager",
+      "versionCode": 2,
       "adaptiveIcon": {
         "backgroundColor": "#1C1C1E",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -30,7 +31,8 @@
           "image": "./assets/splash-icon.png",
           "imageWidth": 200
         }
-      ]
+      ],
+      "expo-sharing"
     ],
     "extra": {
       "eas": {

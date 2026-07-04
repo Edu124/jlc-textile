@@ -73,7 +73,7 @@ function PdfOptionsModal({ billId, onClose }) {
   const generate = async () => {
     setBusy(true);
     const qs = PDF_OPTIONS.map(([k]) => `${k}=${opts[k] ? 1 : 0}`).join("&");
-    try { await openPdf(`/api/sales/${billId}/pdf?${qs}`); onClose(); }
+    try { await openPdf(`/api/sales/${billId}/pdf?${qs}`, `order-form-${billId}.pdf`); onClose(); }
     finally { setBusy(false); }
   };
 

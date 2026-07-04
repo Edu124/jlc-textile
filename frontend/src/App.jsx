@@ -12,6 +12,7 @@ import AIStudio from "./pages/AIStudio.jsx";
 import VisitingCards from "./pages/VisitingCards.jsx";
 import Reports from "./pages/Reports.jsx";
 import Settings from "./pages/Settings.jsx";
+import ImportCustomers from "./pages/ImportCustomers.jsx";
 import {
   Suppliers, Customers, Units,
 } from "./pages/Masters.jsx";
@@ -39,6 +40,7 @@ export default function App() {
         <Route path="/ai" element={<AIStudio />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/import-customers" element={<ImportCustomers />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
