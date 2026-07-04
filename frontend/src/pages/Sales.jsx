@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "../api";
-import { useFetch, apiError, openPdf } from "../lib/useFetch.js";
+import { useFetch, apiError, openPdf, useAmountLock } from "../lib/useFetch.js";
 import { rupeeFull, num } from "../lib/format.js";
 import { PageHeader, Table, Modal, Field, Select, Spinner } from "../components/ui.jsx";
 
@@ -17,16 +17,26 @@ export default function Sales() {
     await api.delete(`/api/sales/${id}`); reload();
   };
 
+  const [customerFor, setCustomerFor] = useState(null);
+  const [pdfFor, setPdfFor] = useState(null);
+  const { unlocked, unlock } = useAmountLock();
+
   const columns = [
-    { header: "Bill No", key: "bill_number" },
+    { header: "Ref No.", cell: (r) => (
+      <span className="font-medium text-ink">{r.reference_no || r.bill_number}</span>
+    )},
     { header: "Date", key: "bill_date" },
-    { header: "Party", key: "customer" },
+    { header: "Party", cell: (r) => (
+      <button className="text-accent hover:underline" onClick={() => setCustomerFor(r)}>{r.customer}</button>
+    )},
     { header: "Designs", key: "designs" },
     { header: "Total Qty", cell: (r) => num(r.total_qty) },
-    { header: "Total ₹", cell: (r) => rupeeFull(r.total_amount) },
+    { header: "Total ₹", cell: (r) => (unlocked
+      ? rupeeFull(r.total_amount)
+      : <button className="tracking-widest text-muted hover:text-accent" title="Tap to unlock amounts" onClick={unlock}>***</button>) },
     { header: "Actions", cell: (r) => (
       <div className="flex gap-3">
-        <button className="text-accent" onClick={() => openPdf(`/api/sales/${r.id}/pdf`)}>PDF</button>
+        <button className="text-accent" onClick={() => setPdfFor(r.id)}>PDF</button>
         <button className="text-accent" onClick={() => setDelivering(r)}>Delivery</button>
         <button className="text-accent" onClick={() => setEditing(r.id)}>Edit</button>
         <button className="text-danger" onClick={() => del(r.id)}>Delete</button>
@@ -36,13 +46,107 @@ export default function Sales() {
 
   return (
     <div>
-      <PageHeader title="Order Forms" subtitle="Tap Delivery on a bill, then a design, to mark how much is delivered"
+      <PageHeader title="Order Forms" subtitle="Tap Delivery on a bill, then a design, to mark how much is delivered. Tap a party name for their full history."
         action={<button className="btn-primary" onClick={() => setOpen(true)}>+ New Order Form</button>} />
       {loading ? <Spinner /> : <Table columns={columns} rows={bills} empty="No order forms yet" />}
-      {open && <NewOrderForm onClose={() => setOpen(false)} onSaved={() => { setOpen(false); reload(); }} />}
-      {editing && <NewOrderForm billId={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); }} />}
+      {open && <NewOrderForm onClose={() => setOpen(false)} onSaved={(id) => { setOpen(false); reload(); setPdfFor(id); }} />}
+      {editing && <NewOrderForm billId={editing} onClose={() => setEditing(null)} onSaved={(id) => { setEditing(null); reload(); setPdfFor(id); }} />}
       {delivering && <DeliveryModal bill={delivering} onClose={() => setDelivering(null)} />}
+      {customerFor && <CustomerSummaryModal customerId={customerFor.customer_id} onClose={() => setCustomerFor(null)} />}
+      {pdfFor && <PdfOptionsModal billId={pdfFor} onClose={() => setPdfFor(null)} />}
     </div>
+  );
+}
+
+const PDF_OPTIONS = [
+  ["ref", "Reference No.", "Print your reference as the bill's No.", true],
+  ["delivery", "Delivery Date", "", true],
+  ["transport", "Transport", "", true],
+  ["agent", "Agent", "", true],
+  ["amounts", "Amounts (₹) per design", "The bill never prints a money total — only total quantity.", false],
+];
+
+function PdfOptionsModal({ billId, onClose }) {
+  const [opts, setOpts] = useState(Object.fromEntries(PDF_OPTIONS.map(([k, , , def]) => [k, def])));
+  const [busy, setBusy] = useState(false);
+
+  const generate = async () => {
+    setBusy(true);
+    const qs = PDF_OPTIONS.map(([k]) => `${k}=${opts[k] ? 1 : 0}`).join("&");
+    try { await openPdf(`/api/sales/${billId}/pdf?${qs}`); onClose(); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open onClose={onClose} title="Generate PDF — what to include?">
+      <div className="space-y-2">
+        {PDF_OPTIONS.map(([k, label, hint]) => (
+          <label key={k} className="flex cursor-pointer items-center gap-3 rounded-xl border border-separator bg-bg p-3">
+            <input type="checkbox" className="h-5 w-5 accent-accent" checked={opts[k]}
+                   onChange={(e) => setOpts({ ...opts, [k]: e.target.checked })} />
+            <div>
+              <div className="text-sm font-semibold text-ink">{label}</div>
+              {hint && <div className="text-xs text-muted">{hint}</div>}
+            </div>
+          </label>
+        ))}
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <button className="btn-ghost" onClick={onClose}>Cancel</button>
+        <button className="btn-primary" onClick={generate} disabled={busy}>{busy ? <Spinner /> : "Generate PDF"}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function CustomerSummaryModal({ customerId, onClose }) {
+  const { data, loading } = useFetch(`/api/customers/${customerId}/summary`);
+
+  return (
+    <Modal open onClose={onClose} title={data ? `${data.customer} — Order History` : "Order History"} wide>
+      {loading || !data ? <Spinner /> : !data.bills.length ? (
+        <div className="rounded-lg bg-surface2 px-3 py-4 text-center text-sm text-muted">No order forms for this party yet</div>
+      ) : (
+        <div className="space-y-3">
+          {data.bills.map((b) => (
+            <div key={b.bill_id} className="rounded-xl border border-separator p-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="font-bold text-ink">{b.reference_no || b.bill_number}</span>
+                  <span className="ml-2 text-xs text-muted">{b.bill_date}</span>
+                </div>
+                <span className={b.completed ? "rounded px-2 py-0.5 text-xs font-semibold bg-okSoft text-ok"
+                                             : "rounded px-2 py-0.5 text-xs font-semibold bg-warnSoft text-warn"}>
+                  {b.completed ? "Completed" : `${num(b.delivered_qty, 0)} / ${num(b.total_qty, 0)} delivered`}
+                </span>
+              </div>
+              <div className="mt-2 space-y-1">
+                {b.items.map((it, i) => (
+                  <div key={i} className="flex items-center justify-between rounded-lg bg-surface2 px-3 py-1.5 text-sm">
+                    <span className="text-ink">{it.design_no || "Design"}</span>
+                    <span className="text-ink2">{num(it.delivered, 0)} / {num(it.qty, 0)} pcs · {rupeeFull(it.amount)}</span>
+                  </div>
+                ))}
+              </div>
+              {b.delivery_refs.length > 0 && (
+                <details className="mt-2 text-xs">
+                  <summary className="cursor-pointer text-muted">Delivery references ({b.delivery_refs.length})</summary>
+                  <div className="mt-1 space-y-1">
+                    {b.delivery_refs.map((d, i) => (
+                      <div key={i} className="flex items-center justify-between rounded bg-surface2 px-2 py-1">
+                        <span className="text-ink">{d.reference_no || "—"} · {d.design_no}</span>
+                        <span className="text-muted">{num(d.pieces, 0)} pcs · {d.date}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="mt-4 flex justify-end"><button className="btn-ghost" onClick={onClose}>Close</button></div>
+    </Modal>
   );
 }
 
@@ -109,6 +213,7 @@ function DesignDeliverModal({ orderId, item, onClose, onSaved }) {
   const hasSizes = SIZES.some(([k]) => it[k] > 0);
   const [vals, setVals] = useState({ qty_m: "", qty_l: "", qty_xl: "", qty_xxl: "", qty_mxxl: "", flat: "" });
   const [dDate, setDDate] = useState(new Date().toISOString().slice(0, 10));
+  const [dRef, setDRef] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -119,7 +224,7 @@ function DesignDeliverModal({ orderId, item, onClose, onSaved }) {
 
   const save = async () => {
     setBusy(true); setErr("");
-    const body = { delivery_date: dDate };
+    const body = { delivery_date: dDate, reference_no: dRef.trim() };
     if (hasSizes) {
       let any = false;
       for (const [k] of SIZES) { const v = Number(vals[k]) || 0; body[k.slice(4)] = v; if (v > 0) any = true; }
@@ -132,6 +237,7 @@ function DesignDeliverModal({ orderId, item, onClose, onSaved }) {
     try {
       await api.post(`/api/orders/${orderId}/items/${item.id}/deliver-log`, body);
       setVals({ qty_m: "", qty_l: "", qty_xl: "", qty_xxl: "", qty_mxxl: "", flat: "" });
+      setDRef("");
       refresh();
     } catch (e) { setErr(apiError(e)); } finally { setBusy(false); }
   };
@@ -169,6 +275,9 @@ function DesignDeliverModal({ orderId, item, onClose, onSaved }) {
         <div className="flex flex-wrap items-end gap-2">
           <div className="w-32"><label className="label">Date</label>
             <input type="date" className="input" value={dDate} onChange={(e) => setDDate(e.target.value)} /></div>
+          <div className="w-32"><label className="label">Reference No.</label>
+            <input className="input" value={dRef} placeholder="optional"
+                   onChange={(e) => setDRef(e.target.value)} /></div>
           {hasSizes ? SIZES.filter(([k]) => it[k] > 0).map(([k, lbl]) => (
             <div key={k} className="w-16 text-center">
               <div className="label">{lbl} <span className="text-muted">·{remainingSize(k)}</span></div>
@@ -198,6 +307,7 @@ function DesignDeliverModal({ orderId, item, onClose, onSaved }) {
               <div key={l.id} className="flex items-center gap-3 rounded-lg bg-surface2 px-3 py-2 text-sm">
                 <span className="font-semibold text-ink">{num(l.pieces, 0)} pcs</span>
                 <span className="text-xs text-muted">{sizeStr(l.sizes)}</span>
+                {l.reference_no && <span className="rounded bg-bg px-1.5 py-0.5 text-xs text-accent">Ref: {l.reference_no}</span>}
                 <span className="ml-auto text-xs text-muted">{l.date}</span>
                 <button className="text-danger" onClick={() => removeLog(l.id)}>✕</button>
               </div>
@@ -225,6 +335,9 @@ function NewOrderForm({ onClose, onSaved, billId }) {
   const [items, setItems] = useState([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const { unlocked, unlock } = useAmountLock();
+  const masked = (v) => (unlocked ? rupeeFull(v)
+    : <button type="button" className="tracking-widest text-muted hover:text-accent" title="Tap to unlock amounts" onClick={unlock}>***</button>);
 
   useEffect(() => {
     if (existing) {
@@ -268,6 +381,22 @@ function NewOrderForm({ onClose, onSaved, billId }) {
     const s = Object.fromEntries(SIZES.map(([k]) => [k, Number(sizes[k]) || 0]));
     const rowQty = Object.values(s).reduce((a, b) => a + b, 0);
     if (rowQty <= 0) return setErr("Enter quantity for at least one size");
+
+    // Warn when any size is being ordered beyond what's in stock.
+    const exceeded = SIZES.filter(([k]) => {
+      const avail = availFor(k);
+      return avail !== null && s[k] > avail;
+    });
+    if (exceeded.length) {
+      const detail = exceeded
+        .map(([k, lbl]) => `${lbl}: in stock ${num(availFor(k), 0)}, you entered ${num(s[k], 0)}`)
+        .join("\n");
+      const ok = confirm(
+        `⚠ Not enough stock for ${p.name}:\n\n${detail}\n\nDo you still want to add it? (The extra pieces will need to be produced.)`
+      );
+      if (!ok) return;
+    }
+
     const amount = computeAmount(p, s);
     setItems([...items, { design_no: p.name, product_id: p.id, ...s, row_qty: rowQty, amount }]);
     setPid(""); setSizes({ qty_m: "", qty_l: "", qty_xl: "", qty_xxl: "", qty_mxxl: "" }); setErr("");
@@ -288,8 +417,7 @@ function NewOrderForm({ onClose, onSaved, billId }) {
     };
     try {
       const { data } = billId ? await api.put(`/api/sales/${billId}`, payload) : await api.post("/api/sales", payload);
-      await openPdf(`/api/sales/${data.id}/pdf`);
-      onSaved();
+      onSaved(data.id);   // parent opens the PDF-options popup
     } catch (e) { setErr(apiError(e)); } finally { setBusy(false); }
   };
 
@@ -335,7 +463,7 @@ function NewOrderForm({ onClose, onSaved, billId }) {
         })}
         <div className="w-24">
           <label className="label">Amount</label>
-          <div className="input flex items-center justify-end font-semibold text-ok">{rupeeFull(entryAmount)}</div>
+          <div className="input flex items-center justify-end font-semibold text-ok">{masked(entryAmount)}</div>
         </div>
         <button className="btn-primary" onClick={addItem}>+ Add</button>
       </div>
@@ -366,7 +494,7 @@ function NewOrderForm({ onClose, onSaved, billId }) {
                   <td className="px-3 py-2 text-ink">{it.design_no}</td>
                   {SIZES.map(([k]) => <td key={k} className="px-2 text-center text-ink2">{it[k] || "—"}</td>)}
                   <td className="px-2 text-center font-semibold text-ink">{it.row_qty}</td>
-                  <td className="px-2 text-right font-semibold text-ink">{rupeeFull(it.amount)}</td>
+                  <td className="px-2 text-right font-semibold text-ink">{masked(it.amount)}</td>
                   <td className="px-2 text-center"><button className="text-danger" onClick={() => setItems(items.filter((_, x) => x !== i))}>✕</button></td>
                 </tr>
               ))}
@@ -376,7 +504,7 @@ function NewOrderForm({ onClose, onSaved, billId }) {
       )}
 
       <div className="mt-3 text-right text-sm font-bold text-ink">
-        Total Quantity: {totalQty} &nbsp; | &nbsp; Total: {rupeeFull(totalAmt)}
+        Total Quantity: {totalQty} &nbsp; | &nbsp; Total: {masked(totalAmt)}
       </div>
 
       {err && <div className="mt-3 rounded-lg bg-dangerSoft px-3 py-2 text-sm text-danger">{err}</div>}

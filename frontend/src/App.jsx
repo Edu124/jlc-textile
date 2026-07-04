@@ -8,7 +8,6 @@ import Purchases from "./pages/Purchases.jsx";
 import RawMaterials from "./pages/RawMaterials.jsx";
 import FinishedGoods from "./pages/FinishedGoods.jsx";
 import Production from "./pages/Production.jsx";
-import Products from "./pages/Products.jsx";
 import AIStudio from "./pages/AIStudio.jsx";
 import VisitingCards from "./pages/VisitingCards.jsx";
 import Reports from "./pages/Reports.jsx";
@@ -36,7 +35,6 @@ export default function App() {
         <Route path="/suppliers" element={<Suppliers />} />
         <Route path="/customers" element={<Customers />} />
         <Route path="/visiting-cards" element={<VisitingCards />} />
-        <Route path="/products" element={<Products />} />
         <Route path="/units" element={<Units />} />
         <Route path="/ai" element={<AIStudio />} />
         <Route path="/reports" element={<Reports />} />

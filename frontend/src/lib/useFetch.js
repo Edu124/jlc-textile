@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import api from "../api";
 
 export function useFetch(path, deps = []) {
@@ -35,6 +35,34 @@ export async function openPdf(path) {
   const res = await api.get(path, { responseType: "blob" });
   const url = URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
   window.open(url, "_blank");
+}
+
+// Amounts are hidden behind a PIN (stored in Settings). Unlocking reveals them
+// briefly, then they re-mask to *** automatically.
+const RELOCK_MS = 30_000;
+
+export function useAmountLock() {
+  const [unlocked, setUnlocked] = useState(false);
+  const timer = useRef(null);
+
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  const unlock = async () => {
+    const pin = window.prompt("Enter PIN to view amounts");
+    if (pin === null) return false;
+    try {
+      const { data } = await api.post("/api/settings/verify-pin", { pin });
+      if (data.ok) {
+        setUnlocked(true);
+        clearTimeout(timer.current);
+        timer.current = setTimeout(() => setUnlocked(false), RELOCK_MS);
+        return true;
+      }
+    } catch { /* fall through */ }
+    alert("Wrong PIN");
+    return false;
+  };
+  return { unlocked, unlock };
 }
 
 // Same auth problem for any authenticated file download — fetch as a blob

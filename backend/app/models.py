@@ -331,6 +331,7 @@ class OrderDelivery(Base):
     order_item_id = Column(Integer, ForeignKey("order_items.id"))
     design_no = Column(String)
     delivery_date = Column(String)
+    reference_no = Column(String)   # challan / delivery reference for this batch
     pieces = Column(Float, default=0)
     size_m = Column(Float, default=0)
     size_l = Column(Float, default=0)

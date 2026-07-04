@@ -32,5 +32,18 @@ def update_settings(body: SettingsIn, db: Session = Depends(get_db)):
     for key, value in body.values.items():
         if key in EDITABLE:
             services.set_setting(db, key, value)
+        elif key == "amount_pin" and (value or "").strip():
+            # write-only: never returned by GET, only replaced when non-empty
+            services.set_setting(db, key, value.strip())
     db.commit()
     return {"ok": True}
+
+
+class PinIn(BaseModel):
+    pin: str
+
+
+@router.post("/verify-pin")
+def verify_pin(body: PinIn, db: Session = Depends(get_db)):
+    stored = services.get_setting(db, "amount_pin", "1234")
+    return {"ok": body.pin == stored}

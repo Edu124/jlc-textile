@@ -62,6 +62,11 @@ def _run_migrations():
         if "reference_no" not in cols:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE sales_bills ADD COLUMN reference_no VARCHAR"))
+    if insp.has_table("order_deliveries"):
+        cols = {c["name"] for c in insp.get_columns("order_deliveries")}
+        if "reference_no" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE order_deliveries ADD COLUMN reference_no VARCHAR"))
     if insp.has_table("tailor_deliveries"):
         cols = {c["name"] for c in insp.get_columns("tailor_deliveries")}
         with engine.begin() as conn:

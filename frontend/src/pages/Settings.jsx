@@ -48,6 +48,15 @@ export default function Settings() {
         <p className="mt-2 text-[11px] text-muted">Text→Image is free (no key). Image→Image needs a key from stability.ai</p>
       </Card>
 
+      <Card title="Privacy" className="mt-4">
+        <Field label="Amount PIN (unlocks ₹ amounts in Order Forms)">
+          <input className="input" type="password" inputMode="numeric" value={form.amount_pin || ""}
+                 onChange={(e) => setForm({ ...form, amount_pin: e.target.value })}
+                 placeholder="leave blank to keep current PIN" />
+        </Field>
+        <p className="mt-2 text-[11px] text-muted">Default PIN is 1234. Amounts show as *** until this PIN is entered.</p>
+      </Card>
+
       <Card title="Backup" className="mt-4">
         <p className="mb-3 text-sm text-ink2">Download a full copy of all your data (safety backup).</p>
         <button className="btn-ghost" onClick={downloadBackup}>⬇ Download Backup (JSON)</button>

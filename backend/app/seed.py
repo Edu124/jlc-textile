@@ -25,6 +25,7 @@ def seed_defaults(db):
         "footer_note1": "For Sizes XL, XXL, 3XL Extra Charges 25-50 Rs.",
         "footer_note2": "Goods Once Sold will not be taken back.",
         "logo_mode": "vector",
+        "amount_pin": "1234",   # PIN to reveal amounts in the app (change in Settings)
     }
     for key, val in defaults.items():
         if db.query(Setting).filter_by(key=key).first() is None:

@@ -193,6 +193,7 @@ SIZE_KEYS = ["m", "l", "xl", "xxl", "mxxl"]
 
 class DeliverLogIn(BaseModel):
     delivery_date: Optional[str] = None
+    reference_no: Optional[str] = ""
     m: float = 0
     l: float = 0
     xl: float = 0
@@ -233,6 +234,7 @@ def add_delivery_log(order_id: int, item_id: int, body: DeliverLogIn, db: Sessio
     db.add(models.OrderDelivery(
         order_id=order_id, order_item_id=item_id, design_no=it.design_no,
         delivery_date=body.delivery_date or date.today().isoformat(), pieces=total,
+        reference_no=(body.reference_no or "").strip(),
         size_m=deltas["m"], size_l=deltas["l"], size_xl=deltas["xl"],
         size_xxl=deltas["xxl"], size_mxxl=deltas["mxxl"], notes=(body.notes or "").strip()))
     _recompute_status(db, o)
@@ -246,6 +248,7 @@ def list_order_deliveries(order_id: int, db: Session = Depends(get_db)):
             .order_by(models.OrderDelivery.id.desc()).all())
     return [{"id": d.id, "order_item_id": d.order_item_id, "design_no": d.design_no,
              "date": d.delivery_date, "pieces": d.pieces or 0, "notes": d.notes or "",
+             "reference_no": d.reference_no or "",
              "sizes": {k: getattr(d, f"size_{k}") or 0 for k in SIZE_KEYS}}
             for d in rows]
 

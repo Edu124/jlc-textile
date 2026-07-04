@@ -132,6 +132,10 @@ function DetailModal({ row, onClose }) {
 function EditGood({ row, onClose, onSaved }) {
   const [name, setName] = useState(row.name || "");
   const [rate, setRate] = useState(String(row.sale_rate || ""));
+  const [rates, setRates] = useState({
+    m: String(row.rate_m || ""), l: String(row.rate_l || ""), xl: String(row.rate_xl || ""),
+    xxl: String(row.rate_xxl || ""), mxxl: String(row.rate_mxxl || ""),
+  });
   const [image, setImage] = useState(row.image || null);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
 
@@ -148,7 +152,11 @@ function EditGood({ row, onClose, onSaved }) {
     setBusy(true); setErr("");
     try {
       await api.put(`/api/finished-goods/${row.product_id}`, {
-        name: name.trim(), sale_rate: Number(rate) || 0, image_base64: image || "" });
+        name: name.trim(), sale_rate: Number(rate) || 0,
+        rate_m: Number(rates.m) || 0, rate_l: Number(rates.l) || 0,
+        rate_xl: Number(rates.xl) || 0, rate_xxl: Number(rates.xxl) || 0,
+        rate_mxxl: Number(rates.mxxl) || 0,
+        image_base64: image || "" });
       onSaved();
     } catch (e) { setErr(apiError(e)); } finally { setBusy(false); }
   };
@@ -159,9 +167,21 @@ function EditGood({ row, onClose, onSaved }) {
         <Field label="Name" required>
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
-        <Field label="Sale Rate">
+        <Field label="Base Rate (used when a size has no rate)">
           <input className="input" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} />
         </Field>
+        <div>
+          <label className="label">Rate per size (₹)</label>
+          <div className="flex flex-wrap gap-2">
+            {SIZES.map(([k, lbl]) => (
+              <div key={k} className="w-16 text-center">
+                <div className="text-[11px] text-muted">{lbl}</div>
+                <input className="input px-1 text-center" inputMode="decimal" value={rates[k]}
+                       onChange={(e) => setRates({ ...rates, [k]: e.target.value })} />
+              </div>
+            ))}
+          </div>
+        </div>
         <Field label="Photo">
           <div className="flex items-center gap-3">
             {image && <img src={image} alt="" className="h-16 w-16 rounded-lg border border-separator object-cover" />}

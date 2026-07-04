@@ -27,6 +27,9 @@ def list_stock(db: Session = Depends(get_db)):
                     "category": cat.name if cat else "",
                     "unit": unit.abbreviation if unit else "", "quantity": qty,
                     "sale_rate": p.sale_rate, "value": qty * (p.sale_rate or 0),
+                    "rate_m": p.rate_m or 0, "rate_l": p.rate_l or 0,
+                    "rate_xl": p.rate_xl or 0, "rate_xxl": p.rate_xxl or 0,
+                    "rate_mxxl": p.rate_mxxl or 0,
                     "image": p.image_path})
     return out
 
@@ -136,6 +139,11 @@ def detail(product_id: int, db: Session = Depends(get_db)):
 class EditIn(BaseModel):
     name: Optional[str] = None
     sale_rate: Optional[float] = None
+    rate_m: Optional[float] = None
+    rate_l: Optional[float] = None
+    rate_xl: Optional[float] = None
+    rate_xxl: Optional[float] = None
+    rate_mxxl: Optional[float] = None
     image_base64: Optional[str] = None   # data URL; pass "" to clear
 
 
@@ -148,6 +156,10 @@ def edit_product(product_id: int, body: EditIn, db: Session = Depends(get_db)):
         p.name = body.name.strip()
     if body.sale_rate is not None:
         p.sale_rate = body.sale_rate
+    for col in ("rate_m", "rate_l", "rate_xl", "rate_xxl", "rate_mxxl"):
+        val = getattr(body, col)
+        if val is not None:
+            setattr(p, col, val)
     if body.image_base64 is not None:
         p.image_path = body.image_base64 or None
     db.commit()

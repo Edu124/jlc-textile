@@ -8,7 +8,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.platypus import (
-    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable, Flowable
+    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable, Flowable, Image
 )
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
@@ -23,6 +23,9 @@ SCRIPT_FONT = "Helvetica-Bold"
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _BUNDLED = os.path.join(_HERE, "fonts")
+# Client's real logo — drop a "logo.png" (or .jpg) next to this file and every
+# PDF uses it; otherwise the drawn vector logo is the fallback.
+_LOGO_PATHS = [os.path.join(_HERE, "logo.png"), os.path.join(_HERE, "logo.jpg")]
 _WIN = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
 _LINUX = "/usr/share/fonts"
 
@@ -147,7 +150,22 @@ def _watermark(co):
     return draw
 
 
-def generate_sales_pdf(db: Session, bill_id: int) -> bytes:
+def _logo_flowable(co):
+    from reportlab.lib.utils import ImageReader
+    for p in _LOGO_PATHS:
+        if os.path.exists(p):
+            try:
+                iw, ih = ImageReader(p).getSize()
+                scale = min((36 * mm) / iw, (28 * mm) / ih)   # fit box, keep aspect
+                return Image(p, width=iw * scale, height=ih * scale)
+            except Exception:
+                continue
+    return VectorLogo(co["slogan"])
+
+
+def generate_sales_pdf(db: Session, bill_id: int, show_amounts: bool = False,
+                       show_ref: bool = True, show_delivery: bool = True,
+                       show_transport: bool = True, show_agent: bool = True) -> bytes:
     bill = db.query(models.SalesBill).get(bill_id)
     if not bill:
         raise ValueError("Bill not found")
@@ -178,7 +196,7 @@ def generate_sales_pdf(db: Session, bill_id: int) -> bytes:
     center_block = [Paragraph(co["name"], s_company), Paragraph(co["tagline"], s_tag),
                     Paragraph(co["address"], s_center),
                     Paragraph(f"GST No.: {co['gst']}  |  Email : {co['email']}", s_center)]
-    header = Table([[VectorLogo(co["slogan"]), center_block, ""]], colWidths=[38 * mm, 112 * mm, 38 * mm])
+    header = Table([[_logo_flowable(co), center_block, ""]], colWidths=[38 * mm, 112 * mm, 38 * mm])
     header.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("ALIGN", (0, 0), (0, 0), "CENTER"),
                                 ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
     story.append(header)
@@ -190,13 +208,17 @@ def generate_sales_pdf(db: Session, bill_id: int) -> bytes:
     addr1, addr2 = (addr.split("\n", 1) + [""])[:2] if addr else ("", "")
     fld = lambda t: Paragraph(t, s_field_b)
     val = lambda t: Paragraph(t or "", s_field)
+    # The client works by their own reference number — show it as the bill's
+    # "No." (falling back to the auto number). Unticked fields print blank,
+    # like an unfilled box on the paper form.
+    ref = getattr(bill, "reference_no", "") or ""
+    bill_no = ref if (show_ref and ref) else bill.bill_number
     meta = Table([
-        [fld("Party"), val(cust.name if cust else ""), fld("No."), val(bill.bill_number)],
-        [fld("Contact"), val(cust.phone if cust else ""), fld("Ref. No."), val(getattr(bill, "reference_no", "") or "")],
-        [fld("Add."), val(addr1), fld("Date"), val(_fmt_date(bill.bill_date))],
-        [fld(""), val(addr2), fld("Delivery Date"), val(_fmt_date(bill.delivery_date))],
-        [fld("GST No."), val(cust.gst_number if cust else ""), fld("Transport"), val(bill.transport)],
-        [fld(""), val(""), fld("Agent"), val(bill.agent)],
+        [fld("Party"), val(cust.name if cust else ""), fld("No."), val(bill_no)],
+        [fld("Contact"), val(cust.phone if cust else ""), fld("Date"), val(_fmt_date(bill.bill_date))],
+        [fld("Add."), val(addr1), fld("Delivery Date"), val(_fmt_date(bill.delivery_date) if show_delivery else "")],
+        [fld(""), val(addr2), fld("Transport"), val(bill.transport if show_transport else "")],
+        [fld("GST No."), val(cust.gst_number if cust else ""), fld("Agent"), val(bill.agent if show_agent else "")],
     ], colWidths=[20 * mm, 90 * mm, 28 * mm, 50 * mm])
     meta.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
                               ("LEFTPADDING", (0, 0), (-1, -1), 1), ("RIGHTPADDING", (0, 0), (-1, -1), 2),
@@ -206,19 +228,26 @@ def generate_sales_pdf(db: Session, bill_id: int) -> bytes:
     story.append(meta)
     story.append(Spacer(1, 3 * mm))
 
-    col_w = [10 * mm, 42 * mm, 16 * mm, 16 * mm, 16 * mm, 16 * mm, 20 * mm, 18 * mm, 32 * mm]
-    data = [["Sr.", "Design No.", "M", "L", "XL", "XXL", "M-XXL", "", "Amount"]]
+    # Amount column is optional (chosen when generating). The bottom line only
+    # ever shows the total QUANTITY — never a money total.
+    if show_amounts:
+        col_w = [10 * mm, 42 * mm, 16 * mm, 16 * mm, 16 * mm, 16 * mm, 20 * mm, 18 * mm, 32 * mm]
+        data = [["Sr.", "Design No.", "M", "L", "XL", "XXL", "M-XXL", "", "Amount"]]
+    else:
+        col_w = [12 * mm, 62 * mm, 18 * mm, 18 * mm, 18 * mm, 18 * mm, 22 * mm, 18 * mm]
+        data = [["Sr.", "Design No.", "M", "L", "XL", "XXL", "M-XXL", ""]]
     z = lambda v: str(int(v)) if v else ""
     total_qty = 0
-    total_amount = 0
     for i in range(20):
         if i < len(items):
-            it = items[i]; total_qty += it.row_qty or 0; total_amount += it.amount or 0
-            data.append([str(i + 1), it.design_no or "", z(it.qty_m), z(it.qty_l),
-                         z(it.qty_xl), z(it.qty_xxl), z(it.qty_mxxl), "",
-                         f"{it.amount:,.0f}" if it.amount else ""])
+            it = items[i]; total_qty += it.row_qty or 0
+            row = [str(i + 1), it.design_no or "", z(it.qty_m), z(it.qty_l),
+                   z(it.qty_xl), z(it.qty_xxl), z(it.qty_mxxl), ""]
+            if show_amounts:
+                row.append(f"{it.amount:,.0f}" if it.amount else "")
+            data.append(row)
         else:
-            data.append([str(i + 1), "", "", "", "", "", "", "", ""])
+            data.append([str(i + 1)] + [""] * (len(col_w) - 1))
     grid = Table(data, colWidths=col_w, repeatRows=1)
     grid.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (-1, 0), FONT_BOLD), ("FONTSIZE", (0, 0), (-1, 0), 9.5),
@@ -236,13 +265,10 @@ def generate_sales_pdf(db: Session, bill_id: int) -> bytes:
     bottom = Table([[
         Paragraph(co["note1"], ParagraphStyle("n", fontName=FONT_BOLD, fontSize=9, textColor=COL_TEXT, leading=12)),
         Paragraph("TOTAL QTY", lbl_q), Paragraph(f"{total_qty:.0f}", val_q),
-        Paragraph("TOTAL", lbl_q), Paragraph(f"₹ {total_amount:,.0f}", val_q),
-    ]], colWidths=[78 * mm, 28 * mm, 22 * mm, 24 * mm, 34 * mm])
+    ]], colWidths=[122 * mm, 36 * mm, 28 * mm])
     bottom.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                                 ("BOX", (1, 0), (2, 0), 0.6, COL_GRID),
                                 ("LINEAFTER", (1, 0), (1, 0), 0.6, COL_GRID),
-                                ("BOX", (3, 0), (4, 0), 0.6, COL_GRID),
-                                ("LINEAFTER", (3, 0), (3, 0), 0.6, COL_GRID),
                                 ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
     story.append(bottom)
     story.append(Spacer(1, 4 * mm))

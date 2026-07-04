@@ -115,22 +115,25 @@ function AddStock({ onClose, onSaved }) {
 const SIZES = [["m", "M"], ["l", "L"], ["xl", "XL"], ["xxl", "XXL"], ["mxxl", "M-XXL"]];
 
 function Adjust({ row, onClose, onSaved }) {
-  const [qty, setQty] = useState(String(row.quantity));
+  const [givenStr, setGivenStr] = useState("");
   const [reason, setReason] = useState("Given to tailor");
   const [name, setName] = useState("");
   const [tailorType, setTailorType] = useState("work");
   const [sizes, setSizes] = useState({ m: "", l: "", xl: "", xxl: "", mxxl: "" });
   const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
 
-  const given = Math.max(0, row.quantity - (Number(qty) || 0));
+  const given = Number(givenStr) || 0;
+  const remaining = row.quantity - given;
   const sizeTotal = SIZES.reduce((a, [k]) => a + (Number(sizes[k]) || 0), 0);
 
   const save = async () => {
+    if (!(given > 0)) return setErr("Enter how much you gave / used");
+    if (given > row.quantity) return setErr(`Only ${num(row.quantity, 2)} ${row.unit} in stock`);
     setBusy(true); setErr("");
     const sizeObj = Object.fromEntries(SIZES.map(([k]) => [k, Number(sizes[k]) || 0]));
     try {
       await api.post(`/api/raw-materials/${row.id}/adjust`, {
-        new_quantity: Number(qty) || 0, reason_type: reason, recipient_name: name,
+        new_quantity: remaining, reason_type: reason, recipient_name: name,
         tailor_type: tailorType, sizes: sizeTotal > 0 ? sizeObj : null,
       });
       onSaved();
@@ -138,16 +141,20 @@ function Adjust({ row, onClose, onSaved }) {
   };
 
   return (
-    <Modal open onClose={onClose} title={`Adjust — ${row.name}`}>
+    <Modal open onClose={onClose} title={`Give / Use — ${row.name}`}>
       <div className="space-y-3">
         <div className="text-sm text-ink2">Current stock: <b>{num(row.quantity, 2)} {row.unit}</b></div>
-        <Field label="New Quantity" required>
-          <input className="input" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} />
+        <Field label={`Quantity given (${row.unit})`} required>
+          <input className="input" inputMode="decimal" value={givenStr} autoFocus
+                 placeholder={`e.g. 10`}
+                 onChange={(e) => setGivenStr(e.target.value.replace(/[^0-9.]/g, ""))} />
         </Field>
         {given > 0 && (
-          <div className="rounded-lg bg-surface2 px-3 py-2 text-xs text-ink3">
-            Sending out <b className="text-ink">{num(given, 2)} {row.unit}</b>
-            {reason === "Given to tailor" && ` → a ${tailorType} tailor job will be created in Production`}
+          <div className={`rounded-lg px-3 py-2 text-xs ${remaining < 0 ? "bg-dangerSoft text-danger" : "bg-surface2 text-ink3"}`}>
+            {remaining < 0
+              ? `Not enough stock — only ${num(row.quantity, 2)} ${row.unit} available`
+              : <>Remaining stock after this: <b className="text-ink">{num(remaining, 2)} {row.unit}</b>
+                 {reason === "Given to tailor" && ` · a ${tailorType} tailor job will be created in Production`}</>}
           </div>
         )}
         <Field label="Reason" required>

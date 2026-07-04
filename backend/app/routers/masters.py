@@ -113,6 +113,47 @@ _make_party_routes("suppliers", models.Supplier)
 _make_party_routes("customers", models.Customer)
 
 
+@router.get("/customers/{pid}/summary")
+def customer_summary(pid: int, db: Session = Depends(get_db)):
+    """Everything sold to this customer: each order form (by its reference
+    number), the designs on it, and delivery progress + delivery references."""
+    cust = db.query(models.Customer).get(pid)
+    if not cust:
+        raise HTTPException(404, "Not found")
+
+    bills = (db.query(models.SalesBill).filter_by(customer_id=pid)
+             .order_by(models.SalesBill.id.desc()).all())
+    out = []
+    for b in bills:
+        items = db.query(models.SalesBillItem).filter_by(bill_id=b.id).all()
+        # Delivery progress lives on the mirrored order.
+        delivered_by_design = {}
+        delivery_refs = []
+        total_delivered = 0.0
+        if b.order_id:
+            for it in db.query(models.OrderItem).filter_by(order_id=b.order_id).all():
+                delivered_by_design[(it.design_no or "").lower()] = it.delivered_qty or 0
+                total_delivered += it.delivered_qty or 0
+            delivery_refs = [
+                {"reference_no": d.reference_no or "", "date": d.delivery_date,
+                 "design_no": d.design_no or "", "pieces": d.pieces or 0}
+                for d in db.query(models.OrderDelivery).filter_by(order_id=b.order_id)
+                    .order_by(models.OrderDelivery.id.desc()).all()]
+        total_qty = b.total_qty or 0
+        out.append({
+            "bill_id": b.id, "bill_number": b.bill_number,
+            "reference_no": b.reference_no or "", "bill_date": b.bill_date,
+            "total_qty": total_qty, "total_amount": b.total_amount or 0,
+            "delivered_qty": total_delivered,
+            "completed": total_qty > 0 and total_delivered >= total_qty,
+            "items": [{"design_no": it.design_no or "", "qty": it.row_qty or 0,
+                       "delivered": delivered_by_design.get((it.design_no or "").lower(), 0),
+                       "amount": it.amount or 0} for it in items],
+            "delivery_refs": delivery_refs,
+        })
+    return {"customer": cust.name, "phone": cust.phone or "", "bills": out}
+
+
 # ══ Raw material types ════════════════════════════════════════════════════════
 class MaterialTypeIn(BaseModel):
     name: str

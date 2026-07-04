@@ -60,8 +60,9 @@ def list_bills(db: Session = Depends(get_db)):
         cust = db.query(models.Customer).get(b.customer_id)
         item_count = db.query(models.SalesBillItem).filter_by(bill_id=b.id).count()
         out.append({"id": b.id, "bill_number": b.bill_number, "bill_date": b.bill_date,
-                    "customer": cust.name if cust else "", "designs": item_count,
-                    "order_id": b.order_id,
+                    "reference_no": b.reference_no or "",
+                    "customer": cust.name if cust else "", "customer_id": b.customer_id,
+                    "designs": item_count, "order_id": b.order_id,
                     "total_qty": b.total_qty or 0, "total_amount": b.total_amount or 0})
     return out
 
@@ -183,11 +184,14 @@ def update_bill(bill_id: int, body: SalesBillIn, db: Session = Depends(get_db)):
 
 
 @router.get("/{bill_id}/pdf")
-def bill_pdf(bill_id: int, db: Session = Depends(get_db)):
+def bill_pdf(bill_id: int, amounts: int = 0, ref: int = 1, delivery: int = 1,
+             transport: int = 1, agent: int = 1, db: Session = Depends(get_db)):
     b = db.query(models.SalesBill).get(bill_id)
     if not b:
         raise HTTPException(404, "Not found")
-    pdf_bytes = generate_sales_pdf(db, bill_id)
+    pdf_bytes = generate_sales_pdf(db, bill_id, show_amounts=bool(amounts),
+                                   show_ref=bool(ref), show_delivery=bool(delivery),
+                                   show_transport=bool(transport), show_agent=bool(agent))
     fname = (b.bill_number or "order").replace("/", "_") + ".pdf"
     return Response(content=pdf_bytes, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{fname}"'})

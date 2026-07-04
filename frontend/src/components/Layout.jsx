@@ -17,7 +17,6 @@ const NAV = [
     ["Suppliers", "/suppliers", "◷"],
     ["Customers", "/customers", "◶"],
     ["Visiting Cards", "/visiting-cards", "▣"],
-    ["Products", "/products", "◼"],
     ["Units", "/units", "◫"],
   ]},
   { section: "Tools", items: [
