@@ -150,6 +150,121 @@ def _watermark(co):
     return draw
 
 
+def generate_challan_pdf(db: Session, job_id: int) -> bytes:
+    """Printable challan for work given to a tailor: design, metres/pieces,
+    colors, size breakdown, signatures."""
+    job = db.query(models.TailorJob).get(job_id)
+    if not job:
+        raise ValueError("Job not found")
+    mat = db.query(models.RawMaterialType).get(job.material_type_id)
+    unit = db.query(models.Unit).get(mat.unit_id) if mat and mat.unit_id else None
+    co = _settings(db)
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=14 * mm, rightMargin=14 * mm,
+                            topMargin=12 * mm, bottomMargin=14 * mm)
+    s_center = ParagraphStyle("c", fontName=FONT, fontSize=9, alignment=TA_CENTER, textColor=COL_TEXT, leading=12)
+    s_company = ParagraphStyle("co", fontName=FONT_BOLD, fontSize=26, alignment=TA_CENTER, textColor=COL_TEXT, leading=28)
+    s_tag = ParagraphStyle("tg", fontName=FONT_BOLD, fontSize=10, alignment=TA_CENTER, textColor=COL_TEXT, leading=13)
+    s_field = ParagraphStyle("fl", fontName=FONT, fontSize=10.5, textColor=COL_TEXT, leading=14)
+    s_field_b = ParagraphStyle("flb", fontName=FONT_BOLD, fontSize=10.5, textColor=COL_TEXT, leading=14)
+    fld = lambda t: Paragraph(t, s_field_b)
+    val = lambda t: Paragraph(str(t) if t not in (None, "") else "—", s_field)
+
+    story = []
+    center_block = [Paragraph(co["name"], s_company), Paragraph(co["tagline"], s_tag),
+                    Paragraph(co["address"], s_center),
+                    Paragraph(f"Mob.: {co['phone']}", s_center)]
+    header = Table([[_logo_flowable(co), center_block, ""]], colWidths=[38 * mm, 106 * mm, 38 * mm])
+    header.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("ALIGN", (0, 0), (0, 0), "CENTER"),
+                                ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    story.append(header)
+    story.append(Spacer(1, 2 * mm))
+    story.append(Paragraph("DELIVERY CHALLAN", ParagraphStyle(
+        "dc", fontName=FONT_BOLD, fontSize=13, alignment=TA_CENTER, textColor=COL_TEXT, spaceAfter=2)))
+    story.append(HRFlowable(width="100%", thickness=1, color=COL_LINE))
+    story.append(Spacer(1, 4 * mm))
+
+    unit_ab = unit.abbreviation if unit else ""
+    given_label = f"{job.qty_given:,.2f}".rstrip("0").rstrip(".") + (f" {unit_ab}" if unit_ab else "")
+    # Colors are stored as a JSON list of {size, color, pieces}; old jobs may
+    # hold plain text.
+    try:
+        import json as _json
+        centries = _json.loads(job.colors) if job.colors else []
+        colors_label = ", ".join(
+            " ".join(x for x in [c.get("size", ""), c.get("color", ""),
+                                 (f"{c['pieces']:,.0f}" if c.get("pieces") else "")] if x)
+            for c in centries) or "—"
+    except Exception:
+        colors_label = job.colors or "—"
+    design_label = (mat.name if mat else "") + (f" ({mat.design_no})" if mat and mat.design_no else "")
+    meta = Table([
+        [fld("Challan No."), val(f"CH-{job.id:04d}"), fld("Date"), val(job.created_at.strftime("%d-%m-%Y") if job.created_at else "")],
+        [fld("Tailor"), val(job.tailor_name), fld("Type"), val("Work (stitching)" if (job.tailor_type or "work") == "work" else "Final (finishing)")],
+        [fld("Design"), val(design_label), fld("Colors"), val(colors_label)],
+        [fld("Qty Given"), val(given_label), fld("Pieces"), val(f"{job.target_pieces:,.0f}" if job.target_pieces else "—")],
+    ], colWidths=[28 * mm, 62 * mm, 28 * mm, 64 * mm])
+    meta.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                              ("GRID", (0, 0), (-1, -1), 0.6, COL_GRID),
+                              ("BACKGROUND", (0, 0), (0, -1), COL_HEADBG),
+                              ("BACKGROUND", (2, 0), (2, -1), COL_HEADBG),
+                              ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                              ("LEFTPADDING", (0, 0), (-1, -1), 6)]))
+    story.append(meta)
+    story.append(Spacer(1, 5 * mm))
+
+    z = lambda v: f"{v:,.0f}" if v else ""
+    sizes = Table([
+        ["M", "L", "XL", "XXL", "M-XXL", "TOTAL"],
+        [z(job.size_m), z(job.size_l), z(job.size_xl), z(job.size_xxl), z(job.size_mxxl),
+         z((job.size_m or 0) + (job.size_l or 0) + (job.size_xl or 0) + (job.size_xxl or 0) + (job.size_mxxl or 0))],
+    ], colWidths=[30 * mm, 30 * mm, 30 * mm, 30 * mm, 31 * mm, 31 * mm])
+    sizes.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, 0), FONT_BOLD), ("BACKGROUND", (0, 0), (-1, 0), COL_HEADBG),
+        ("FONTNAME", (0, 1), (-1, 1), FONT), ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"), ("GRID", (0, 0), (-1, -1), 0.6, COL_GRID),
+        ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
+    story.append(Paragraph("Pieces per size", ParagraphStyle(
+        "ps", fontName=FONT_BOLD, fontSize=10, textColor=COL_TEXT, spaceAfter=3)))
+    story.append(sizes)
+
+    # Additional items given along with the work (astar, lining, buttons...)
+    extra = []
+    try:
+        import json as _json
+        extra = _json.loads(job.additional) if job.additional else []
+    except Exception:
+        extra = []
+    if extra:
+        story.append(Spacer(1, 5 * mm))
+        story.append(Paragraph("Additional given", ParagraphStyle(
+            "ag", fontName=FONT_BOLD, fontSize=10, textColor=COL_TEXT, spaceAfter=3)))
+        rows = [["Description", "Metres"]]
+        for it in extra:
+            m = it.get("metres") or 0
+            rows.append([it.get("description") or "", (f"{m:,.2f}".rstrip("0").rstrip(".") if m else "—")])
+        extra_tbl = Table(rows, colWidths=[130 * mm, 52 * mm])
+        extra_tbl.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, 0), FONT_BOLD), ("BACKGROUND", (0, 0), (-1, 0), COL_HEADBG),
+            ("FONTNAME", (0, 1), (-1, -1), FONT), ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("ALIGN", (1, 0), (1, -1), "CENTER"), ("GRID", (0, 0), (-1, -1), 0.6, COL_GRID),
+            ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (0, -1), 6)]))
+        story.append(extra_tbl)
+    story.append(Spacer(1, 18 * mm))
+
+    sig = Table([[Paragraph("Received by (Tailor)", s_center), "", Paragraph(f"For {co['name']}", s_center)]],
+                colWidths=[60 * mm, 62 * mm, 60 * mm])
+    sig.setStyle(TableStyle([("LINEABOVE", (0, 0), (0, 0), 0.8, COL_LINE),
+                             ("LINEABOVE", (2, 0), (2, 0), 0.8, COL_LINE),
+                             ("TOPPADDING", (0, 0), (-1, -1), 4)]))
+    story.append(sig)
+
+    doc.build(story)
+    return buf.getvalue()
+
+
 def _logo_flowable(co):
     from reportlab.lib.utils import ImageReader
     for p in _LOGO_PATHS:

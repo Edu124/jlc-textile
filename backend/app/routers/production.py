@@ -1,4 +1,5 @@
-from typing import Optional
+import json
+from typing import List, Optional
 from datetime import datetime, date
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -115,6 +116,207 @@ def advance_stage(batch_id: int, body: AdvanceIn, db: Session = Depends(get_db))
     return {"ok": True, "stage": nxt}
 
 
+# ── Tailors master (name + work/final type) ───────────────────────────────────
+
+class TailorIn(BaseModel):
+    name: str
+    tailor_type: str = "work"
+
+
+@router.get("/tailors")
+def list_tailors(db: Session = Depends(get_db)):
+    rows = (db.query(models.Tailor).filter(models.Tailor.is_active == 1)
+            .order_by(models.Tailor.name).all())
+    return [{"id": t.id, "name": t.name, "tailor_type": t.tailor_type or "work"} for t in rows]
+
+
+@router.post("/tailors")
+def create_tailor(body: TailorIn, db: Session = Depends(get_db)):
+    if not body.name.strip():
+        raise HTTPException(400, "Enter the tailor's name")
+    ttype = body.tailor_type if body.tailor_type in ("work", "final") else "work"
+    t = models.Tailor(name=body.name.strip(), tailor_type=ttype)
+    db.add(t); db.commit(); db.refresh(t)
+    return {"id": t.id, "name": t.name, "tailor_type": t.tailor_type}
+
+
+@router.delete("/tailors/{tid}")
+def delete_tailor(tid: int, db: Session = Depends(get_db)):
+    t = db.query(models.Tailor).get(tid)
+    if t:
+        t.is_active = 0   # jobs keep their copied name/type, history intact
+        db.commit()
+    return {"ok": True}
+
+
+# ── Assign work: raw material → tailor (creates the job + deducts stock) ─────
+
+class AdditionalItem(BaseModel):
+    description: str = ""
+    metres: float = 0
+
+
+def _additional_json(items):
+    rows = [{"description": (i.description or "").strip(), "metres": i.metres or 0}
+            for i in (items or []) if (i.description or "").strip() or (i.metres or 0) > 0]
+    return json.dumps(rows) if rows else None
+
+
+class ColorItem(BaseModel):
+    size: str = ""      # M / L / XL / XXL / M-XXL
+    color: str = ""
+    pieces: float = 0
+
+
+def _colors_json(items):
+    rows = [{"size": (i.size or "").strip(), "color": (i.color or "").strip(), "pieces": i.pieces or 0}
+            for i in (items or []) if (i.color or "").strip() or (i.pieces or 0) > 0]
+    return json.dumps(rows) if rows else None
+
+
+def _colors_out(raw):
+    """Jobs store colors as a JSON list now; old jobs may hold plain text."""
+    if not raw:
+        return []
+    try:
+        return json.loads(raw)
+    except Exception:
+        return [{"size": "", "color": raw, "pieces": 0}]
+
+
+class AssignIn(BaseModel):
+    tailor_id: int
+    material_type_id: int
+    metres: float = 0
+    pieces: float = 0
+    colors: Optional[List[ColorItem]] = None
+    sizes: Optional[SizeBreakdown] = None
+    additional: Optional[List[AdditionalItem]] = None
+
+
+@router.post("/assign")
+def assign_work(body: AssignIn, db: Session = Depends(get_db)):
+    tailor = db.query(models.Tailor).get(body.tailor_id)
+    if not tailor:
+        raise HTTPException(404, "Tailor not found")
+    mat = db.query(models.RawMaterialType).get(body.material_type_id)
+    if not mat:
+        raise HTTPException(404, "Design not found")
+
+    s = body.sizes
+    size_total = (s.m + s.l + s.xl + s.xxl + s.mxxl) if s else 0
+    given = body.metres if body.metres > 0 else body.pieces
+    if given <= 0 and size_total <= 0:
+        raise HTTPException(400, "Enter metres or pieces to give")
+    if given <= 0:
+        given = size_total
+
+    # deduct what leaves raw-material stock
+    stock = db.query(models.RawMaterialStock).filter_by(material_type_id=mat.id).first()
+    avail = stock.quantity if stock else 0
+    if given > avail:
+        raise HTTPException(400, f"Only {avail:.2f} in stock for {mat.name}")
+    stock.quantity = avail - given
+    db.add(models.RawMaterialTransaction(
+        material_type_id=mat.id, transaction_type="adjustment", quantity=-given,
+        reference_type="adjustment", recipient_type="Given to tailor",
+        recipient_name=tailor.name))
+
+    target = size_total if size_total > 0 else body.pieces
+    ttype = tailor.tailor_type or "work"
+    if ttype == "final" and target <= 0:
+        target = given
+    job = models.TailorJob(
+        material_type_id=mat.id, tailor_name=tailor.name, tailor_type=ttype,
+        qty_given=given, qty_returned=0, target_pieces=target,
+        colors=_colors_json(body.colors), additional=_additional_json(body.additional),
+        size_m=s.m if s else 0, size_l=s.l if s else 0, size_xl=s.xl if s else 0,
+        size_xxl=s.xxl if s else 0, size_mxxl=s.mxxl if s else 0)
+    db.add(job); db.commit(); db.refresh(job)
+    return _job_dict(db, job)
+
+
+class WorkSourceIn(BaseModel):
+    job_id: int
+    pieces: float = 0
+    metres: float = 0
+
+
+class AssignFromWorkIn(BaseModel):
+    tailor_id: int
+    sources: List[WorkSourceIn]
+    colors: Optional[List[ColorItem]] = None
+    sizes: Optional[SizeBreakdown] = None
+    additional: Optional[List[AdditionalItem]] = None
+
+
+@router.post("/assign-from-work")
+def assign_from_work(body: AssignFromWorkIn, db: Session = Depends(get_db)):
+    """Hand ready work-tailor output (pieces or metres) onward to a FINAL
+    tailor — straight from the main Assign popup. One final job is created per
+    work source so parentage and ready-accounting stay correct."""
+    tailor = db.query(models.Tailor).get(body.tailor_id)
+    if not tailor:
+        raise HTTPException(404, "Tailor not found")
+    if (tailor.tailor_type or "work") != "final":
+        raise HTTPException(400, "Pick a final tailor to assign work output onward")
+    if not body.sources:
+        raise HTTPException(400, "Enter how much to take from a work tailor")
+
+    s = body.sizes
+    created = []
+    first = True
+    for src in body.sources:
+        w = db.query(models.TailorJob).get(src.job_id)
+        if not w or (w.tailor_type or "work") != "work":
+            raise HTTPException(404, f"Work job {src.job_id} not found")
+        dels = db.query(models.TailorDelivery).filter_by(job_id=w.id).all()
+        ready_p = sum(d.pieces or 0 for d in dels) - (w.assigned_pieces or 0)
+        ready_m = sum(d.metres or 0 for d in dels) - (w.assigned_metres or 0)
+        take_p = max(0.0, src.pieces or 0)
+        take_m = max(0.0, src.metres or 0)
+        if take_p <= 0 and take_m <= 0:
+            continue
+        mat = db.query(models.RawMaterialType).get(w.material_type_id)
+        if take_p > ready_p:
+            raise HTTPException(400, f"Only {ready_p:.0f} pcs ready from {w.tailor_name} ({mat.name if mat else ''})")
+        if take_m > ready_m:
+            raise HTTPException(400, f"Only {ready_m:.2f} m ready from {w.tailor_name} ({mat.name if mat else ''})")
+
+        given = take_p if take_p > 0 else take_m
+        target = take_p   # pieces tracked when pieces taken; metres-mode otherwise
+        job = models.TailorJob(
+            material_type_id=w.material_type_id, tailor_name=tailor.name,
+            tailor_type="final", qty_given=given, qty_returned=0,
+            target_pieces=target, parent_job_id=w.id,
+            colors=_colors_json(body.colors), additional=_additional_json(body.additional),
+            size_m=s.m if (s and first) else 0, size_l=s.l if (s and first) else 0,
+            size_xl=s.xl if (s and first) else 0, size_xxl=s.xxl if (s and first) else 0,
+            size_mxxl=s.mxxl if (s and first) else 0)
+        db.add(job); db.flush()
+        w.assigned_pieces = (w.assigned_pieces or 0) + take_p
+        w.assigned_metres = (w.assigned_metres or 0) + take_m
+        created.append(job.id)
+        first = False
+
+    if not created:
+        raise HTTPException(400, "Enter how much to take from a work tailor")
+    db.commit()
+    return {"ids": created}
+
+
+@router.get("/jobs/{job_id}/challan")
+def job_challan(job_id: int, db: Session = Depends(get_db)):
+    from fastapi.responses import Response
+    from ..pdf import generate_challan_pdf
+    j = db.query(models.TailorJob).get(job_id)
+    if not j:
+        raise HTTPException(404, "Not found")
+    pdf_bytes = generate_challan_pdf(db, job_id)
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="challan-{job_id}.pdf"'})
+
+
 # ── Tailor jobs (fabric given to tailors for stitching) ──────────────────────
 #
 # Flow: Adjust "with tailor" down → the returned delta lands as `pending_qty`
@@ -150,8 +352,9 @@ def _job_dict(db, j):
             fg = db.query(models.FinishedGoodsStock).filter_by(product_id=p.id).first()
             finished = fg.quantity if fg else 0
     target = j.target_pieces or 0
-    delivered = sum(d.pieces or 0 for d in
-                    db.query(models.TailorDelivery).filter_by(job_id=j.id).all())
+    dels = db.query(models.TailorDelivery).filter_by(job_id=j.id).all()
+    delivered = sum(d.pieces or 0 for d in dels)
+    delivered_metres = sum(d.metres or 0 for d in dels)
     assigned = j.assigned_pieces or 0
     return {"id": j.id, "material": mat.name if mat else "", "material_id": j.material_type_id,
             "tailor": j.tailor_name, "tailor_type": j.tailor_type or "work",
@@ -159,9 +362,12 @@ def _job_dict(db, j):
             "qty_given": given, "qty_returned": returned, "held": max(0, given - returned),
             "pending_qty": pending, "finished_qty": finished, "product_id": j.product_id,
             "target_pieces": target, "delivered_pieces": delivered,
+            "delivered_metres": delivered_metres,
             "remaining_pieces": max(0, target - delivered),
             "assigned_pieces": assigned, "ready_to_assign": max(0, delivered - assigned),
-            "parent_job_id": j.parent_job_id,
+            "ready_metres": max(0, delivered_metres - (j.assigned_metres or 0)),
+            "parent_job_id": j.parent_job_id, "colors": _colors_out(j.colors),
+            "additional": json.loads(j.additional) if j.additional else [],
             "sizes": {"m": j.size_m or 0, "l": j.size_l or 0, "xl": j.size_xl or 0,
                       "xxl": j.size_xxl or 0, "mxxl": j.size_mxxl or 0},
             "created_at": j.created_at.isoformat()[:10] if j.created_at else ""}
@@ -169,6 +375,7 @@ def _job_dict(db, j):
 
 def _delivery_dict(d):
     return {"id": d.id, "delivery_date": d.delivery_date, "pieces": d.pieces or 0,
+            "metres": d.metres or 0,
             "image": d.image_path, "notes": d.notes or "",
             "sizes": {"m": d.size_m or 0, "l": d.size_l or 0, "xl": d.size_xl or 0,
                       "xxl": d.size_xxl or 0, "mxxl": d.size_mxxl or 0},
@@ -221,6 +428,8 @@ def delete_job(job_id: int, db: Session = Depends(get_db)):
     j = db.query(models.TailorJob).get(job_id)
     if j:
         db.query(models.TailorDelivery).filter_by(job_id=job_id).delete()
+        # children (final jobs carved from this one) keep living, just unlinked
+        db.query(models.TailorJob).filter_by(parent_job_id=job_id).update({"parent_job_id": None})
         db.delete(j); db.commit()
     return {"ok": True}
 
@@ -272,6 +481,7 @@ def _get_or_create_finished_product(db: Session, name: str):
 class DeliveryIn(BaseModel):
     delivery_date: Optional[str] = None
     pieces: float = 0
+    metres: float = 0                     # metre-tracked jobs log metres instead
     sizes: Optional[SizeBreakdown] = None   # optional per-size breakdown
     image_base64: Optional[str] = None   # data URL, optional reference photo
     notes: Optional[str] = ""
@@ -285,17 +495,19 @@ def add_delivery(job_id: int, body: DeliveryIn, db: Session = Depends(get_db)):
     s = body.sizes
     size_total = (s.m + s.l + s.xl + s.xxl + s.mxxl) if s else 0
     pieces = size_total if size_total > 0 else body.pieces
-    if pieces <= 0:
-        raise HTTPException(400, "Pieces must be greater than 0")
+    metres = max(0.0, body.metres or 0)
+    if pieces <= 0 and metres <= 0:
+        raise HTTPException(400, "Enter pieces or metres received")
     d = models.TailorDelivery(
         job_id=job_id, delivery_date=body.delivery_date or date.today().isoformat(),
-        pieces=pieces, image_path=body.image_base64, notes=(body.notes or "").strip(),
+        pieces=pieces, metres=metres,
+        image_path=body.image_base64, notes=(body.notes or "").strip(),
         size_m=s.m if s else 0, size_l=s.l if s else 0, size_xl=s.xl if s else 0,
         size_xxl=s.xxl if s else 0, size_mxxl=s.mxxl if s else 0)
     db.add(d)
 
     # Pieces returned from a FINAL tailor become finished goods straight away.
-    if (j.tailor_type or "work") == "final":
+    if (j.tailor_type or "work") == "final" and pieces > 0:
         mat = db.query(models.RawMaterialType).get(j.material_type_id)
         prod = _get_or_create_finished_product(db, mat.name if mat else f"Design {job_id}")
         if not j.product_id:

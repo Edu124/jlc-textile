@@ -202,6 +202,31 @@ class DeliverLogIn(BaseModel):
     notes: Optional[str] = ""
 
 
+def _received_for_design(db: Session, design: str):
+    """Pieces of this design physically received (final-tailor deliveries and
+    direct entries), per size + total."""
+    rows = (db.query(models.TailorDelivery)
+            .join(models.TailorJob, models.TailorDelivery.job_id == models.TailorJob.id)
+            .join(models.RawMaterialType, models.TailorJob.material_type_id == models.RawMaterialType.id)
+            .filter(models.TailorJob.tailor_type == "final",
+                    models.RawMaterialType.name.ilike(design)).all())
+    per_size = {k: 0.0 for k in SIZE_KEYS}
+    total = 0.0
+    for d in rows:
+        for k in SIZE_KEYS:
+            per_size[k] += getattr(d, f"size_{k}") or 0
+        total += d.pieces or 0
+    return per_size, total
+
+
+def _delivered_for_design(db: Session, design: str):
+    """Pieces of this design already handed to customers, across every order."""
+    items = db.query(models.OrderItem).filter(models.OrderItem.design_no.ilike(design)).all()
+    per_size = {k: sum(getattr(i, f"delivered_{k}") or 0 for i in items) for k in SIZE_KEYS}
+    total = sum(i.delivered_qty or 0 for i in items)
+    return per_size, total
+
+
 @router.post("/{order_id}/items/{item_id}/deliver-log")
 def add_delivery_log(order_id: int, item_id: int, body: DeliverLogIn, db: Session = Depends(get_db)):
     """Record a dated delivery of some pieces against one order line. The values
@@ -217,6 +242,31 @@ def add_delivery_log(order_id: int, item_id: int, body: DeliverLogIn, db: Sessio
         raise HTTPException(400, "Enter pieces delivered")
     # Validate against remaining per size (or, for no-size items, the total).
     has_sizes = any((getattr(it, f"qty_{k}") or 0) for k in SIZE_KEYS)
+
+    # You can only hand over pieces that have physically arrived — check the
+    # design's received stock (tailor deliveries + direct entries) minus what
+    # was already delivered on any order.
+    design = (it.design_no or "").strip()
+    if design:
+        recv, recv_total = _received_for_design(db, design)
+        done, done_total = _delivered_for_design(db, design)
+        # receipts logged without a size split form a shared untagged pool
+        untagged = max(0.0, recv_total - sum(recv.values()))
+        if has_sizes:
+            for k in SIZE_KEYS:
+                if deltas[k] <= 0:
+                    continue
+                left = recv[k] + untagged - done[k]
+                if deltas[k] > left + 1e-9:
+                    raise HTTPException(400,
+                        f"{k.upper()}: only {max(0, left):.0f} pcs of {design} in hand — "
+                        "that size hasn't arrived in Finished Goods yet")
+        else:
+            left = recv_total - done_total
+            if total > left + 1e-9:
+                raise HTTPException(400,
+                    f"Only {max(0, left):.0f} pcs of {design} in hand — "
+                    "stock hasn't arrived in Finished Goods yet")
     if has_sizes:
         for k in SIZE_KEYS:
             ordered = getattr(it, f"qty_{k}") or 0

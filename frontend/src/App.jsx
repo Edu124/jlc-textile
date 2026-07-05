@@ -5,9 +5,7 @@ import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Sales from "./pages/Sales.jsx";
 import Purchases from "./pages/Purchases.jsx";
-import RawMaterials from "./pages/RawMaterials.jsx";
-import FinishedGoods from "./pages/FinishedGoods.jsx";
-import Production from "./pages/Production.jsx";
+import Inventory from "./pages/Inventory.jsx";
 import AIStudio from "./pages/AIStudio.jsx";
 import VisitingCards from "./pages/VisitingCards.jsx";
 import Reports from "./pages/Reports.jsx";
@@ -30,9 +28,10 @@ export default function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/sales" element={<Sales />} />
         <Route path="/purchases" element={<Purchases />} />
-        <Route path="/raw-materials" element={<RawMaterials />} />
-        <Route path="/finished-goods" element={<FinishedGoods />} />
-        <Route path="/production" element={<Production />} />
+        <Route path="/inventory" element={<Inventory />} />
+        <Route path="/raw-materials" element={<Navigate to="/inventory?tab=raw" replace />} />
+        <Route path="/production" element={<Navigate to="/inventory?tab=production" replace />} />
+        <Route path="/finished-goods" element={<Navigate to="/inventory?tab=finished" replace />} />
         <Route path="/suppliers" element={<Suppliers />} />
         <Route path="/customers" element={<Customers />} />
         <Route path="/visiting-cards" element={<VisitingCards />} />

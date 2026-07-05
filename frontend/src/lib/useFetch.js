@@ -46,13 +46,15 @@ async function sendToApp(blob, filename, mime) {
 }
 
 // window.open(path) can't carry the Bearer auth header, so the API 401s
-// silently. Fetch the PDF as a blob (with auth) and open that instead.
+// silently. Fetch the PDF as a blob (with auth), then show it in the in-app
+// preview popup (PdfPreviewHost) — or hand it to the native share sheet
+// inside the Android app.
 export async function openPdf(path, filename = "order-form.pdf") {
   const res = await api.get(path, { responseType: "blob" });
   const blob = new Blob([res.data], { type: "application/pdf" });
   if (window.ReactNativeWebView) return sendToApp(blob, filename, "application/pdf");
   const url = URL.createObjectURL(blob);
-  window.open(url, "_blank");
+  window.dispatchEvent(new CustomEvent("jlc-pdf", { detail: { url, filename } }));
 }
 
 // Amounts are hidden behind a PIN (stored in Settings). Unlocking reveals them

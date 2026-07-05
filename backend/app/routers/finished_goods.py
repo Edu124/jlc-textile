@@ -136,6 +136,63 @@ def detail(product_id: int, db: Session = Depends(get_db)):
     }
 
 
+class DirectIn(BaseModel):
+    name: str
+    m: float = 0
+    l: float = 0
+    xl: float = 0
+    xxl: float = 0
+    mxxl: float = 0
+    pieces: float = 0          # used when no size breakdown is given
+    sale_rate: Optional[float] = None
+    image_base64: Optional[str] = None
+
+
+@router.post("/direct")
+def direct_entry(body: DirectIn, db: Session = Depends(get_db)):
+    """Directly add ready pieces to Finished Goods (no tailor flow). Recorded
+    as a delivery under a synthetic 'Direct Entry' final job so per-size
+    availability and the design's history stay accurate."""
+    from datetime import date
+    from .materials import _get_or_create_type
+    from .production import _get_or_create_finished_product
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "Enter the design name")
+    size_total = body.m + body.l + body.xl + body.xxl + body.mxxl
+    total = size_total if size_total > 0 else body.pieces
+    if total <= 0:
+        raise HTTPException(400, "Enter pieces")
+
+    mat = _get_or_create_type(db, name, None)
+    job = (db.query(models.TailorJob)
+           .filter_by(material_type_id=mat.id, tailor_name="Direct Entry", tailor_type="final")
+           .first())
+    if not job:
+        job = models.TailorJob(material_type_id=mat.id, tailor_name="Direct Entry",
+                               tailor_type="final", qty_given=0, target_pieces=0)
+        db.add(job); db.flush()
+
+    db.add(models.TailorDelivery(
+        job_id=job.id, delivery_date=date.today().isoformat(), pieces=total,
+        image_path=body.image_base64,
+        size_m=body.m, size_l=body.l, size_xl=body.xl, size_xxl=body.xxl, size_mxxl=body.mxxl))
+
+    prod = _get_or_create_finished_product(db, name)
+    if not job.product_id:
+        job.product_id = prod.id
+    if body.image_base64 and not prod.image_path:
+        prod.image_path = body.image_base64
+    if body.sale_rate is not None and body.sale_rate > 0:
+        prod.sale_rate = body.sale_rate
+    services.adjust_finished_stock(db, prod.id, total)
+    db.add(models.FinishedGoodsTransaction(
+        product_id=prod.id, transaction_type="direct_entry", quantity=total,
+        reference_id=job.id, reference_type="tailor_job"))
+    db.commit()
+    return {"ok": True, "product_id": prod.id}
+
+
 class EditIn(BaseModel):
     name: Optional[str] = None
     sale_rate: Optional[float] = None
@@ -153,7 +210,20 @@ def edit_product(product_id: int, body: EditIn, db: Session = Depends(get_db)):
     if not p:
         raise HTTPException(404, "Not found")
     if body.name is not None and body.name.strip():
-        p.name = body.name.strip()
+        new_name = body.name.strip()
+        old_name = p.name or ""
+        # The design's raw material and its finished product are linked by
+        # name — renaming the finished good renames the raw material too, so
+        # stock, tailor jobs and availability all stay connected.
+        if new_name.lower() != old_name.lower():
+            mats = (db.query(models.RawMaterialType)
+                    .filter(models.RawMaterialType.name.ilike(old_name)).all())
+            clash = (db.query(models.RawMaterialType)
+                     .filter(models.RawMaterialType.name.ilike(new_name)).first())
+            if mats and (clash is None or clash in mats):
+                for m in mats:
+                    m.name = new_name
+        p.name = new_name
     if body.sale_rate is not None:
         p.sale_rate = body.sale_rate
     for col in ("rate_m", "rate_l", "rate_xl", "rate_xxl", "rate_mxxl"):

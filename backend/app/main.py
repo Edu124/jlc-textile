@@ -67,10 +67,15 @@ def _run_migrations():
         if "reference_no" not in cols:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE order_deliveries ADD COLUMN reference_no VARCHAR"))
+    if insp.has_table("raw_material_types"):
+        cols = {c["name"] for c in insp.get_columns("raw_material_types")}
+        if "design_no" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE raw_material_types ADD COLUMN design_no VARCHAR"))
     if insp.has_table("tailor_deliveries"):
         cols = {c["name"] for c in insp.get_columns("tailor_deliveries")}
         with engine.begin() as conn:
-            for col in ("size_m", "size_l", "size_xl", "size_xxl", "size_mxxl"):
+            for col in ("size_m", "size_l", "size_xl", "size_xxl", "size_mxxl", "metres"):
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE tailor_deliveries ADD COLUMN {col} FLOAT DEFAULT 0"))
     if insp.has_table("tailor_jobs"):
@@ -87,6 +92,12 @@ def _run_migrations():
             for col in ("size_m", "size_l", "size_xl", "size_xxl", "size_mxxl"):
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE tailor_jobs ADD COLUMN {col} FLOAT DEFAULT 0"))
+            if "colors" not in cols:
+                conn.execute(text("ALTER TABLE tailor_jobs ADD COLUMN colors VARCHAR"))
+            if "additional" not in cols:
+                conn.execute(text("ALTER TABLE tailor_jobs ADD COLUMN additional TEXT"))
+            if "assigned_metres" not in cols:
+                conn.execute(text("ALTER TABLE tailor_jobs ADD COLUMN assigned_metres FLOAT DEFAULT 0"))
 
 
 def _backfill_sales_stock(db):

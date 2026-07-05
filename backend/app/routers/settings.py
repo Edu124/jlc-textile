@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/settings", tags=["settings"],
 EDITABLE = [
     "company_name", "company_tagline", "company_slogan", "address", "gst_number",
     "phone", "email", "instagram", "footer_note1", "footer_note2",
-    "logo_mode", "ai_api_key",
+    "logo_mode", "ai_api_key", "custom_colors",
 ]
 
 

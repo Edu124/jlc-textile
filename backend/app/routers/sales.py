@@ -67,6 +67,60 @@ def list_bills(db: Session = Depends(get_db)):
     return out
 
 
+SIZE_LABELS = {"m": "M", "l": "L", "xl": "XL", "xxl": "XXL", "mxxl": "M-XXL"}
+
+
+@router.get("/pending")
+def pending_deliveries(db: Session = Depends(get_db)):
+    """Ordered-but-undelivered pieces per design+size across all order forms,
+    matched against pieces PHYSICALLY IN HAND (received from tailors / direct
+    entries minus already handed over) — the same check the delivery popup
+    enforces, so 'Ready' here always means the delivery will go through."""
+    from .orders import _received_for_design, _delivered_for_design
+    cache = {}
+
+    def in_hand(design, size_key=None):
+        key = design.lower()
+        if key not in cache:
+            recv, rt = _received_for_design(db, design)
+            done, dt = _delivered_for_design(db, design)
+            untagged = max(0.0, rt - sum(recv.values()))
+            cache[key] = (recv, done, untagged, rt, dt)
+        recv, done, untagged, rt, dt = cache[key]
+        if size_key:
+            return max(0.0, recv[size_key] + untagged - done[size_key])
+        return max(0.0, rt - dt)
+
+    out = []
+    for b in db.query(models.SalesBill).order_by(models.SalesBill.id.desc()).all():
+        if not b.order_id:
+            continue
+        cust = db.query(models.Customer).get(b.customer_id)
+        for it in db.query(models.OrderItem).filter_by(order_id=b.order_id).all():
+            design = (it.design_no or "").strip()
+            has_sizes = any((getattr(it, f"qty_{k}") or 0) for k in SIZE_LABELS)
+            if has_sizes:
+                for k, lbl in SIZE_LABELS.items():
+                    pend = (getattr(it, f"qty_{k}") or 0) - (getattr(it, f"delivered_{k}") or 0)
+                    if pend <= 0:
+                        continue
+                    stock = in_hand(design, k) if design else 0
+                    out.append({"bill_id": b.id, "ref": b.reference_no or b.bill_number,
+                                "customer": cust.name if cust else "", "design_no": design,
+                                "size": lbl, "pending": pend, "in_stock": stock,
+                                "ready": stock >= pend})
+            else:
+                pend = (it.quantity or 0) - (it.delivered_qty or 0)
+                if pend <= 0:
+                    continue
+                stock = in_hand(design) if design else 0
+                out.append({"bill_id": b.id, "ref": b.reference_no or b.bill_number,
+                            "customer": cust.name if cust else "", "design_no": design,
+                            "size": "—", "pending": pend, "in_stock": stock,
+                            "ready": stock >= pend})
+    return out
+
+
 @router.get("/{bill_id}")
 def get_bill(bill_id: int, db: Session = Depends(get_db)):
     b = db.query(models.SalesBill).get(bill_id)
@@ -226,6 +280,9 @@ def delete_bill(bill_id: int, db: Session = Depends(get_db)):
     b = db.query(models.SalesBill).get(bill_id)
     if b:
         if b.order_id:
+            # Postgres enforces FKs — remove/unlink everything pointing at the order
+            db.query(models.OrderDelivery).filter_by(order_id=b.order_id).delete()
+            db.query(models.ProductionBatch).filter_by(order_id=b.order_id).update({"order_id": None})
             db.query(models.OrderItem).filter_by(order_id=b.order_id).delete()
             order = db.query(models.Order).get(b.order_id)
             if order: db.delete(order)

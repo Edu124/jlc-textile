@@ -50,6 +50,7 @@ class RawMaterialType(Base):
     __tablename__ = "raw_material_types"
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False, unique=True)
+    design_no = Column(String)   # design number, shown alongside the name
     unit_id = Column(Integer, ForeignKey("units.id"))
     low_stock_threshold = Column(Float, default=0)
     description = Column(Text)
@@ -80,6 +81,16 @@ class RawMaterialTransaction(Base):
     created_at = Column(DateTime, default=_now)
 
 
+class Tailor(Base):
+    """Master list of tailors the client works with (name + work/final type)."""
+    __tablename__ = "tailors"
+    id = Column(Integer, primary_key=True)
+    name = Column(String)
+    tailor_type = Column(String, default="work")   # "work" | "final"
+    is_active = Column(Integer, default=1)
+    created_at = Column(DateTime, default=_now)
+
+
 class TailorJob(Base):
     """Raw material given to a tailor for stitching (job work).
     held = qty_given - qty_returned. Returned quantity flows into the linked
@@ -95,9 +106,12 @@ class TailorJob(Base):
     qty_given = Column(Float, default=0)
     qty_returned = Column(Float, default=0)
     target_pieces = Column(Float, default=0)
-    # Work jobs only: pieces already handed onward to final tailors.
-    # ready-to-assign = (pieces delivered by this work tailor) - assigned_pieces.
+    colors = Column(String)   # free text, e.g. "Red 20, Blue 30"
+    additional = Column(Text)  # JSON list of extra items given: [{description, metres}]
+    # Work jobs only: output already handed onward to final tailors.
+    # ready = delivered (pieces or metres) - assigned.
     assigned_pieces = Column(Float, default=0)
+    assigned_metres = Column(Float, default=0)
     # Final jobs: the work job they were carved out of.
     parent_job_id = Column(Integer, ForeignKey("tailor_jobs.id"))
     # Optional per-size piece breakdown (how many of each size to make / given).
@@ -119,6 +133,7 @@ class TailorDelivery(Base):
     job_id = Column(Integer, ForeignKey("tailor_jobs.id"))
     delivery_date = Column(String)
     pieces = Column(Float, default=0)
+    metres = Column(Float, default=0)   # metre-tracked jobs log work in metres
     # Optional per-size breakdown of this delivery (sum = pieces when used).
     size_m = Column(Float, default=0)
     size_l = Column(Float, default=0)

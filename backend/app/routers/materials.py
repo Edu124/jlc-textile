@@ -20,8 +20,10 @@ def list_stock(db: Session = Depends(get_db)):
         rate = stock.avg_rate if stock else 0
         thr = m.low_stock_threshold or 0
         out.append({
-            "id": m.id, "name": m.name, "unit": unit.abbreviation if unit else "",
+            "id": m.id, "name": m.name, "design_no": m.design_no or "",
+            "unit": unit.abbreviation if unit else "",
             "quantity": qty, "avg_rate": rate, "value": qty * rate,
+            "description": m.description or "",
             "low_stock_threshold": thr,
             "status": "Low Stock" if (thr > 0 and qty <= thr) else "OK",
         })
@@ -29,14 +31,16 @@ def list_stock(db: Session = Depends(get_db)):
 
 
 class StockEntryIn(BaseModel):
-    name: str                       # design number / name
+    name: str                       # design name
+    design_no: Optional[str] = ""   # design number
     unit_id: Optional[int] = None   # metres / pieces / etc.
     quantity: float
     rate: float = 0
+    description: Optional[str] = ""
     note: Optional[str] = ""
 
 
-def _get_or_create_type(db: Session, name: str, unit_id):
+def _get_or_create_type(db: Session, name: str, unit_id, design_no="", description=""):
     """Stock is added by free-text design name now (no separate material-type
     master). Same name reuses one stock line; new names create one."""
     name = name.strip()
@@ -45,8 +49,14 @@ def _get_or_create_type(db: Session, name: str, unit_id):
     if existing:
         if unit_id and not existing.unit_id:
             existing.unit_id = unit_id
+        if (design_no or "").strip():
+            existing.design_no = design_no.strip()
+        if (description or "").strip():
+            existing.description = description.strip()
         return existing
-    m = models.RawMaterialType(name=name, unit_id=unit_id)
+    m = models.RawMaterialType(name=name, unit_id=unit_id,
+                               design_no=(design_no or "").strip(),
+                               description=(description or "").strip())
     db.add(m); db.flush()
     return m
 
@@ -54,10 +64,10 @@ def _get_or_create_type(db: Session, name: str, unit_id):
 @router.post("/stock-entry")
 def add_stock(body: StockEntryIn, db: Session = Depends(get_db)):
     if not body.name.strip():
-        raise HTTPException(400, "Enter a design number / name")
+        raise HTTPException(400, "Enter the design name")
     if body.quantity <= 0:
         raise HTTPException(400, "Quantity must be greater than 0")
-    m = _get_or_create_type(db, body.name, body.unit_id)
+    m = _get_or_create_type(db, body.name, body.unit_id, body.design_no, body.description)
     services.adjust_raw_stock(db, m.id, body.quantity, body.rate)
     db.add(models.RawMaterialTransaction(
         material_type_id=m.id, transaction_type="manual_addition",
@@ -127,7 +137,19 @@ def adjust(material_type_id: int, body: AdjustIn, db: Session = Depends(get_db))
 
 @router.delete("/{material_type_id}")
 def delete_material(material_type_id: int, db: Session = Depends(get_db)):
-    """Remove a raw-material/design stock line entirely (stock + history)."""
+    """Remove a design completely: stock, history and its tailor jobs.
+    Postgres enforces the foreign keys, so dependents must go first."""
+    job_ids = [j.id for j in db.query(models.TailorJob)
+               .filter_by(material_type_id=material_type_id).all()]
+    if job_ids:
+        db.query(models.TailorDelivery).filter(
+            models.TailorDelivery.job_id.in_(job_ids)).delete(synchronize_session=False)
+        db.query(models.TailorJob).filter(
+            models.TailorJob.parent_job_id.in_(job_ids)).update(
+            {"parent_job_id": None}, synchronize_session=False)
+        db.query(models.TailorJob).filter(
+            models.TailorJob.id.in_(job_ids)).delete(synchronize_session=False)
+    db.query(models.ProductBOM).filter_by(material_type_id=material_type_id).delete()
     db.query(models.RawMaterialStock).filter_by(material_type_id=material_type_id).delete()
     db.query(models.RawMaterialTransaction).filter_by(material_type_id=material_type_id).delete()
     m = db.query(models.RawMaterialType).get(material_type_id)

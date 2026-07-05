@@ -27,3 +27,7 @@ mobile-app/ios/
 # OS
 Thumbs.db
 .DS_Store
+
+# local test artifacts
+test-cards/
+frontend/public/test-card.jpg

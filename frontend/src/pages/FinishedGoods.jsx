@@ -11,6 +11,7 @@ export default function FinishedGoods() {
   const [adjustFor, setAdjustFor] = useState(null);
   const [editFor, setEditFor] = useState(null);
   const [detailFor, setDetailFor] = useState(null);
+  const [directOpen, setDirectOpen] = useState(false);
 
   const totalQty = (rows || []).reduce((a, b) => a + b.quantity, 0);
   const value = (rows || []).reduce((a, b) => a + b.value, 0);
@@ -43,7 +44,8 @@ export default function FinishedGoods() {
 
   return (
     <div>
-      <PageHeader title="Finished Goods" subtitle="Ready to sell. Pieces from final tailors land here automatically — add a photo and rename as needed." />
+      <PageHeader title="Finished Goods" subtitle="Ready to sell. Pieces from final tailors land here automatically — add a photo and rename as needed."
+        action={<button className="btn-primary" onClick={() => setDirectOpen(true)}>+ Direct Entry</button>} />
       <div className="mb-4 grid grid-cols-3 gap-4">
         <StatCard label="Items" value={rows?.length || 0} icon="◼" />
         <StatCard label="Total Qty" value={num(totalQty)} icon="◉" accent="#7FA8B8" />
@@ -53,7 +55,88 @@ export default function FinishedGoods() {
       {adjustFor && <Adjust row={adjustFor} onClose={() => setAdjustFor(null)} onSaved={() => { setAdjustFor(null); reload(); }} />}
       {editFor && <EditGood row={editFor} onClose={() => setEditFor(null)} onSaved={() => { setEditFor(null); reload(); }} />}
       {detailFor && <DetailModal row={detailFor} onClose={() => setDetailFor(null)} />}
+      {directOpen && <DirectEntry onClose={() => setDirectOpen(false)} onSaved={() => { setDirectOpen(false); reload(); }} />}
     </div>
+  );
+}
+
+function DirectEntry({ onClose, onSaved }) {
+  const [name, setName] = useState("");
+  const [sizes, setSizes] = useState({ m: "", l: "", xl: "", xxl: "", mxxl: "" });
+  const [pieces, setPieces] = useState("");
+  const [rate, setRate] = useState("");
+  const [image, setImage] = useState(null);
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
+
+  const sizeTotal = SIZES.reduce((a, [k]) => a + (Number(sizes[k]) || 0), 0);
+
+  const onFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setImage(reader.result);
+    reader.readAsDataURL(file);
+  };
+
+  const save = async () => {
+    if (!name.trim()) return setErr("Enter the design name");
+    const total = sizeTotal > 0 ? sizeTotal : (Number(pieces) || 0);
+    if (!(total > 0)) return setErr("Enter pieces");
+    setBusy(true); setErr("");
+    try {
+      await api.post("/api/finished-goods/direct", {
+        name: name.trim(),
+        m: Number(sizes.m) || 0, l: Number(sizes.l) || 0, xl: Number(sizes.xl) || 0,
+        xxl: Number(sizes.xxl) || 0, mxxl: Number(sizes.mxxl) || 0,
+        pieces: Number(pieces) || 0,
+        sale_rate: Number(rate) || 0, image_base64: image });
+      onSaved();
+    } catch (e) { setErr(apiError(e)); } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open onClose={onClose} title="Direct Entry — Finished Goods">
+      <div className="space-y-3">
+        <Field label="Design Name" required>
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. D-204" />
+        </Field>
+        <div>
+          <label className="label">Pieces per size (or use total below)</label>
+          <div className="flex flex-wrap gap-2">
+            {SIZES.map(([k, lbl]) => (
+              <div key={k} className="w-16 text-center">
+                <div className="text-[11px] text-muted">{lbl}</div>
+                <input className="input px-1 text-center" inputMode="numeric" value={sizes[k]}
+                       onChange={(e) => setSizes({ ...sizes, [k]: e.target.value.replace(/[^0-9]/g, "") })} />
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Total pieces">
+            <input className="input" inputMode="numeric" value={sizeTotal > 0 ? sizeTotal : pieces}
+                   disabled={sizeTotal > 0}
+                   onChange={(e) => setPieces(e.target.value.replace(/[^0-9]/g, ""))} />
+          </Field>
+          <Field label="Sale rate (optional)">
+            <input className="input" inputMode="decimal" value={rate}
+                   onChange={(e) => setRate(e.target.value.replace(/[^0-9.]/g, ""))} />
+          </Field>
+        </div>
+        <Field label="Photo">
+          <div className="flex items-center gap-3">
+            {image && <img src={image} alt="" className="h-16 w-16 rounded-lg border border-separator object-cover" />}
+            <input type="file" accept="image/*" onChange={onFile} className="hidden" id="direct-photo" />
+            <label htmlFor="direct-photo" className="btn-ghost cursor-pointer">{image ? "Change photo" : "📷 Add photo"}</label>
+          </div>
+        </Field>
+        {err && <div className="rounded-lg bg-dangerSoft px-3 py-2 text-sm text-danger">{err}</div>}
+        <div className="flex justify-end gap-2">
+          <button className="btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={save} disabled={busy}>{busy ? <Spinner /> : "Add to Stock"}</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -185,7 +268,7 @@ function EditGood({ row, onClose, onSaved }) {
         <Field label="Photo">
           <div className="flex items-center gap-3">
             {image && <img src={image} alt="" className="h-16 w-16 rounded-lg border border-separator object-cover" />}
-            <input type="file" accept="image/*" capture="environment" onChange={onFile} className="hidden" id={`fg-photo-${row.product_id}`} />
+            <input type="file" accept="image/*" onChange={onFile} className="hidden" id={`fg-photo-${row.product_id}`} />
             <label htmlFor={`fg-photo-${row.product_id}`} className="btn-ghost cursor-pointer">{image ? "Change photo" : "📷 Add photo"}</label>
             {image && <button className="text-danger text-sm" onClick={() => setImage(null)}>Remove</button>}
           </div>

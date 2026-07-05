@@ -8,6 +8,7 @@ const SIZES = [["qty_m", "M"], ["qty_l", "L"], ["qty_xl", "XL"], ["qty_xxl", "XX
 
 export default function Sales() {
   const { data: bills, loading, reload } = useFetch("/api/sales");
+  const { data: pending, reload: reloadPending } = useFetch("/api/sales/pending");
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [delivering, setDelivering] = useState(null);
@@ -44,14 +45,45 @@ export default function Sales() {
     )},
   ];
 
+  const pendingColumns = [
+    { header: "Ref No.", key: "ref" },
+    { header: "Party", key: "customer" },
+    { header: "Design", key: "design_no" },
+    { header: "Size", key: "size" },
+    { header: "Pending", cell: (r) => <span className="font-semibold text-warn">{num(r.pending, 0)}</span> },
+    { header: "In Stock Now", cell: (r) => num(r.in_stock, 0) },
+    { header: "Status", cell: (r) => (
+      r.ready
+        ? <span className="rounded px-2 py-0.5 text-xs font-semibold bg-okSoft text-ok">Ready to deliver</span>
+        : r.in_stock > 0
+        ? <span className="rounded px-2 py-0.5 text-xs font-semibold bg-warnSoft text-warn">Partial ({num(r.in_stock, 0)})</span>
+        : <span className="rounded px-2 py-0.5 text-xs font-semibold bg-surface2 text-muted">Waiting stock</span>
+    )},
+    { header: "Actions", cell: (r) => (
+      <button className="text-accent" onClick={() => {
+        const bill = bills?.find((b) => b.id === r.bill_id);
+        if (bill) setDelivering(bill);
+      }}>Deliver</button>
+    )},
+  ];
+
   return (
     <div>
       <PageHeader title="Order Forms" subtitle="Tap Delivery on a bill, then a design, to mark how much is delivered. Tap a party name for their full history."
         action={<button className="btn-primary" onClick={() => setOpen(true)}>+ New Order Form</button>} />
       {loading ? <Spinner /> : <Table columns={columns} rows={bills} empty="No order forms yet" />}
-      {open && <NewOrderForm onClose={() => setOpen(false)} onSaved={(id) => { setOpen(false); reload(); setPdfFor(id); }} />}
-      {editing && <NewOrderForm billId={editing} onClose={() => setEditing(null)} onSaved={(id) => { setEditing(null); reload(); setPdfFor(id); }} />}
-      {delivering && <DeliveryModal bill={delivering} onClose={() => setDelivering(null)} />}
+
+      <div className="mt-8">
+        <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-muted">
+          Pending Deliveries — waiting pieces per design &amp; size
+        </h2>
+        <Table columns={pendingColumns} rows={pending || []}
+               empty="Nothing pending — every ordered piece is delivered." />
+      </div>
+
+      {open && <NewOrderForm onClose={() => setOpen(false)} onSaved={(id) => { setOpen(false); reload(); reloadPending(); setPdfFor(id); }} />}
+      {editing && <NewOrderForm billId={editing} onClose={() => setEditing(null)} onSaved={(id) => { setEditing(null); reload(); reloadPending(); setPdfFor(id); }} />}
+      {delivering && <DeliveryModal bill={delivering} onClose={() => { setDelivering(null); reloadPending(); }} />}
       {customerFor && <CustomerSummaryModal customerId={customerFor.customer_id} onClose={() => setCustomerFor(null)} />}
       {pdfFor && <PdfOptionsModal billId={pdfFor} onClose={() => setPdfFor(null)} />}
     </div>

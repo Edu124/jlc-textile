@@ -3,22 +3,160 @@ import api from "../api";
 import { apiError } from "../lib/useFetch.js";
 import { PageHeader, Field, Spinner } from "../components/ui.jsx";
 
-// ── Image preprocessing: upscale + grayscale + contrast (big OCR accuracy win) ──
-async function preprocess(file) {
-  const img = await new Promise((res, rej) => {
+// ── Image preprocessing ────────────────────────────────────────────────────────
+async function loadImage(file) {
+  return new Promise((res, rej) => {
     const i = new Image();
     i.onload = () => res(i);
     i.onerror = rej;
     i.src = URL.createObjectURL(file);
   });
-  const targetW = Math.max(img.naturalWidth, 1400);   // upscale small photos
-  const scale = targetW / img.naturalWidth;
+}
+
+// Find the card in the photo automatically, so far-away shots scan without
+// manual cropping. Primary signal: EDGE DENSITY — printed text is busy while
+// tables/covers are smooth, and this works for dark cards too. Fallback:
+// Otsu-bright region (classic white card on dark table).
+function detectCard(img) {
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  const W = 320;
+  const H = Math.max(1, Math.round((ih / iw) * W));
   const c = document.createElement("canvas");
-  c.width = Math.round(img.naturalWidth * scale);
-  c.height = Math.round(img.naturalHeight * scale);
+  c.width = W; c.height = H;
+  const ctx = c.getContext("2d");
+  ctx.drawImage(img, 0, 0, W, H);
+  const d = ctx.getImageData(0, 0, W, H).data;
+
+  const luma = new Uint8Array(W * H);
+  const hist = new Array(256).fill(0);
+  for (let i = 0, p = 0; p < d.length; p += 4, i++) {
+    const g = Math.round(0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2]);
+    luma[i] = g; hist[g]++;
+  }
+
+  // moving-average smoothing bridges the gaps between text lines
+  const smooth = (a, r = 5) => a.map((_, i) => {
+    let s = 0, n = 0;
+    for (let j = Math.max(0, i - r); j <= Math.min(a.length - 1, i + r); j++) { s += a[j]; n++; }
+    return s / n;
+  });
+  // largest contiguous run above a threshold
+  const run = (counts, min) => {
+    let bs = -1, be = -1, s = -1;
+    for (let i = 0; i <= counts.length; i++) {
+      const on = i < counts.length && counts[i] > min;
+      if (on && s === -1) s = i;
+      if (!on && s !== -1) {
+        if (be - bs < i - s) { bs = s; be = i; }
+        s = -1;
+      }
+    }
+    return bs === -1 ? null : [bs, be];
+  };
+  const box = (rows, cols) => {
+    if (!rows || !cols) return null;
+    const sx = cols[0] / W, sw = (cols[1] - cols[0]) / W;
+    const sy = rows[0] / H, sh = (rows[1] - rows[0]) / H;
+    if (sw * sh < 0.03 || sw * sh > 0.92) return null;   // sliver or full frame
+    const pad = 0.05;
+    return {
+      x: Math.max(0, sx - pad), y: Math.max(0, sy - pad),
+      w: Math.min(1 - Math.max(0, sx - pad), sw + 2 * pad),
+      h: Math.min(1 - Math.max(0, sy - pad), sh + 2 * pad),
+    };
+  };
+
+  // 1) Edge-density detection
+  const rowE = new Array(H).fill(0), colE = new Array(W).fill(0);
+  for (let y = 0; y < H - 1; y++)
+    for (let x = 0; x < W - 1; x++) {
+      const i = y * W + x;
+      const e = Math.abs(luma[i] - luma[i + 1]) + Math.abs(luma[i] - luma[i + W]);
+      if (e > 26) { rowE[y]++; colE[x]++; }
+    }
+  const rowsE = run(smooth(rowE), 0.045 * W);
+  const colsE = run(smooth(colE), 0.045 * H);
+  const edgeBox = box(rowsE, colsE);
+  if (edgeBox) return edgeBox;
+
+  // 2) Otsu-bright fallback
+  const total = W * H;
+  let sumAll = 0;
+  for (let t = 0; t < 256; t++) sumAll += t * hist[t];
+  let sumB = 0, wB = 0, best = 0, thr = 127;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (!wB) continue;
+    const wF = total - wB;
+    if (!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB, mF = (sumAll - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > best) { best = between; thr = t; }
+  }
+  const rowB = new Array(H).fill(0), colB = new Array(W).fill(0);
+  let brightTotal = 0;
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++)
+      if (luma[y * W + x] > thr) { rowB[y]++; colB[x]++; brightTotal++; }
+  if (brightTotal / total > 0.8) return null;
+  return box(run(smooth(rowB), 0.25 * W), run(smooth(colB), 0.25 * H));
+}
+
+// Second-pass refine: crop to the first detection, detect again inside it,
+// and compose — tightens boxes that grabbed background on the first pass.
+function refineRegion(img, r1) {
+  if (!r1) return null;
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  const c = document.createElement("canvas");
+  const rw = r1.w * iw, rh = r1.h * ih;
+  const scale = Math.min(1, 700 / rw);
+  c.width = Math.max(1, Math.round(rw * scale));
+  c.height = Math.max(1, Math.round(rh * scale));
+  c.getContext("2d").drawImage(img, r1.x * iw, r1.y * ih, rw, rh, 0, 0, c.width, c.height);
+  const r2 = detectCard(c);
+  if (!r2 || r2.w * r2.h > 0.85) return r1;
+  return { x: r1.x + r2.x * r1.w, y: r1.y + r2.y * r1.h, w: r2.w * r1.w, h: r2.h * r1.h };
+}
+
+// Colour crop of the detected card (optionally rotated upright) for the preview.
+function colorCrop(img, region, rot = 0) {
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  const rx = region ? region.x * iw : 0, ry = region ? region.y * ih : 0;
+  const rw = region ? region.w * iw : iw, rh = region ? region.h * ih : ih;
+  const scale = Math.min(1, 1000 / Math.max(rw, rh));
+  const w0 = Math.round(rw * scale), h0 = Math.round(rh * scale);
+  const c = document.createElement("canvas");
+  if (rot === 90 || rot === 270) { c.width = h0; c.height = w0; } else { c.width = w0; c.height = h0; }
+  const ctx = c.getContext("2d");
+  ctx.save();
+  if (rot === 90) { ctx.translate(c.width, 0); ctx.rotate(Math.PI / 2); }
+  else if (rot === 270) { ctx.translate(0, c.height); ctx.rotate(-Math.PI / 2); }
+  ctx.drawImage(img, rx, ry, rw, rh, 0, 0, w0, h0);
+  ctx.restore();
+  return c.toDataURL("image/jpeg", 0.85);
+}
+
+// Upscale + grayscale + contrast (big OCR accuracy win). `region` optionally
+// crops to the detected card first (fractions of the full image), and `rot`
+// (0/90/270) turns a sideways card upright before OCR.
+function preprocess(img, region, rot = 0) {
+  const rx = region ? region.x * img.naturalWidth : 0;
+  const ry = region ? region.y * img.naturalHeight : 0;
+  const rw = region ? region.w * img.naturalWidth : img.naturalWidth;
+  const rh = region ? region.h * img.naturalHeight : img.naturalHeight;
+  const scale = Math.max(1, 1600 / Math.max(rw, rh));
+  const w0 = Math.round(rw * scale), h0 = Math.round(rh * scale);
+  const c = document.createElement("canvas");
+  if (rot === 90 || rot === 270) { c.width = h0; c.height = w0; }
+  else { c.width = w0; c.height = h0; }
   const ctx = c.getContext("2d");
   ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(img, 0, 0, c.width, c.height);
+  ctx.save();
+  if (rot === 90) { ctx.translate(c.width, 0); ctx.rotate(Math.PI / 2); }
+  else if (rot === 270) { ctx.translate(0, c.height); ctx.rotate(-Math.PI / 2); }
+  ctx.drawImage(img, rx, ry, rw, rh, 0, 0, w0, h0);
+  ctx.restore();
   const im = ctx.getImageData(0, 0, c.width, c.height);
   const d = im.data;
   for (let p = 0; p < d.length; p += 4) {
@@ -81,11 +219,26 @@ function cleanLine(l) {
 // Meaningful text = at least 3 letters after cleaning (drops OCR noise like "\ py").
 const letterCount = (l) => (l.match(/[a-zA-Z]/g) || []).length;
 
+// OCR often misreads digits as lookalike letters (O→0, S→5, B→8, l→1...).
+// On lines that already carry several real digits, map them back.
+const DIGIT_LOOKALIKE = { O: "0", o: "0", D: "0", Q: "0", I: "1", l: "1", "|": "1",
+  "!": "1", i: "1", Z: "2", z: "2", S: "5", s: "5", G: "6", B: "8", g: "9" };
+
+function _phoneDigits(line) {
+  const real = (line.match(/\d/g) || []).length;
+  const src = real >= 6
+    ? line.split("").map((ch) => DIGIT_LOOKALIKE[ch] ?? ch).join("")
+    : line;
+  return src.replace(/[^\d]/g, "");
+}
+
 // Prefer Indian 10-digit mobiles; fall back to any 8-13 digit run (foreign formats).
 function extractPhones(rawText) {
   const indian = [];
-  const digitsAll = rawText.replace(/[^\d\n]/g, "\n").split("\n").filter(Boolean);
-  for (const run of rawText.split("\n").map((l) => l.replace(/[^\d]/g, ""))) {
+  for (let run of rawText.split("\n").map(_phoneDigits)) {
+    // strip country / trunk prefix ("+91 98765 43210", "098765 43210")
+    if (run.length === 12 && run.startsWith("91")) run = run.slice(2);
+    if (run.length === 11 && run.startsWith("0")) run = run.slice(1);
     for (let i = 0; i + 10 <= run.length; i++) {
       const chunk = run.slice(i, i + 10);
       if (/^[6-9]/.test(chunk) && !indian.includes(chunk)) { indian.push(chunk); break; }
@@ -155,6 +308,12 @@ function parseCard(text) {
   });
   const nameLine = name;   // the raw cleaned line the name came from
   name = fixSpacedCaps(truncateAtAddress(capsPrefix(name)));
+  // OCR picks up stray marks at the card edges as lone letters ("f RESHMA
+  // SELECTION j") — trim single-character tokens off both ends.
+  const toks = name.split(" ").filter(Boolean);
+  while (toks.length > 1 && toks[0].replace(/[^A-Za-z0-9]/g, "").length <= 1 && toks[0] !== "&") toks.shift();
+  while (toks.length > 1 && toks[toks.length - 1].replace(/[^A-Za-z0-9]/g, "").length <= 1 && toks[toks.length - 1] !== "&") toks.pop();
+  name = toks.join(" ");
 
   // Address: only lines with a real address signal — an address word, a pincode,
   // or digits + comma. (Keeps OCR garbage and stray card text out.)
@@ -191,13 +350,59 @@ export default function VisitingCards() {
     setForm({ name: "", phone: "", address: "" });
     setImgUrl(URL.createObjectURL(file));
     try {
-      const canvas = await preprocess(file);
+      const img = await loadImage(file);
       const Tesseract = await import("tesseract.js");
-      const { data } = await Tesseract.recognize(canvas, "eng", {
-        logger: (m) => { if (m.status === "recognizing text") setProgress(Math.round(m.progress * 100)); },
-      });
-      setRawText(data.text);
-      const parsed = parseCard(data.text);
+      const ocr = async (canvas) => {
+        const { data } = await Tesseract.recognize(canvas, "eng", {
+          logger: (m) => { if (m.status === "recognizing text") setProgress(Math.round(m.progress * 100)); },
+        });
+        return { text: data.text, conf: data.confidence || 0 };
+      };
+      // Quality = Tesseract's own confidence + bonuses for real signals.
+      // Upside-down text scores low confidence even when it produces
+      // plausible-looking junk, so this reliably picks the right rotation.
+      const quality = (r) =>
+        r.conf +
+        (/[\w.+-]+@[\w-]+\.[\w.\-]+/.test(r.text) ? 15 : 0) +
+        (extractPhones(r.text).length ? 10 : 0);
+
+      // Auto-find the card, then refine once inside the crop to shed background.
+      const region = refineRegion(img, detectCard(img));
+      if (region) setImgUrl(colorCrop(img, region, 0));
+
+      const portrait = region && region.h * img.naturalHeight > region.w * img.naturalWidth;
+      // Sideways cards: try BOTH 90 and 270 and let confidence decide — never
+      // trust just one direction.
+      const rots = region ? (portrait ? [90, 270] : [0]) : [0];
+      let best = null, bestRot = 0;
+      for (const rot of rots) {
+        setProgress(0);
+        const r = await ocr(preprocess(img, region, rot));
+        r.q = quality(r);
+        if (!best || r.q > best.q) { best = r; bestRot = rot; }
+      }
+      // Low confidence? Try the remaining rotation(s).
+      if (region && best.conf < 55) {
+        for (const rot of (portrait ? [0] : [90, 270])) {
+          setProgress(0);
+          const r = await ocr(preprocess(img, region, rot));
+          r.q = quality(r);
+          if (r.q > best.q) { best = r; bestRot = rot; }
+        }
+      }
+      // Still nearly nothing? Fall back to the full photo.
+      if (letterCount(best.text) < 12) {
+        setProgress(0);
+        const r = await ocr(preprocess(img, null, 0));
+        r.q = quality(r);
+        if (r.q > best.q) { best = r; bestRot = 0; }
+      }
+      // Show the upright, tightened card as the final preview.
+      if (region) setImgUrl(colorCrop(img, region, bestRot));
+
+      const text = best.text;
+      setRawText(text);
+      const parsed = parseCard(text);
       setForm(parsed);
       if (!parsed.name && !parsed.phone) setErr("Couldn't read much from this photo — try a closer, straighter shot with good light, or type the details in.");
     } catch (e) {

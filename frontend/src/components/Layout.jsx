@@ -1,13 +1,12 @@
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../auth.jsx";
+import PdfPreviewHost from "./PdfPreview.jsx";
 
 const NAV = [
-  { section: "" , items: [["Dashboard", "/", "⊞"]] },
-  { section: "Inventory", items: [
-    ["Raw Materials", "/raw-materials", "◈"],
-    ["Finished Goods", "/finished-goods", "◉"],
-    ["Production", "/production", "⚙"],
+  { section: "" , items: [
+    ["Dashboard", "/", "⊞"],
+    ["Inventory", "/inventory", "◈"],
   ]},
   { section: "Commerce", items: [
     ["Order Forms", "/sales", "↑"],
@@ -105,6 +104,7 @@ export default function Layout() {
         </header>
         <main className="min-h-0 flex-1 overflow-y-auto bg-bg p-4 md:p-6">
           <Outlet />
+          <PdfPreviewHost />
         </main>
       </div>
     </div>
