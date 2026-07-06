@@ -15,7 +15,12 @@ export default function Sales() {
 
   const del = async (id) => {
     if (!confirm("Delete this order form?")) return;
-    await api.delete(`/api/sales/${id}`); reload();
+    await api.delete(`/api/sales/${id}`); reload(); reloadPending();
+  };
+
+  const delFromPending = async (r) => {
+    if (!confirm(`Remove order form ${r.ref}? This deletes the whole bill (all its designs), not just this one line.`)) return;
+    await api.delete(`/api/sales/${r.bill_id}`); reload(); reloadPending();
   };
 
   const [customerFor, setCustomerFor] = useState(null);
@@ -60,10 +65,13 @@ export default function Sales() {
         : <span className="rounded px-2 py-0.5 text-xs font-semibold bg-surface2 text-muted">Waiting stock</span>
     )},
     { header: "Actions", cell: (r) => (
-      <button className="text-accent" onClick={() => {
-        const bill = bills?.find((b) => b.id === r.bill_id);
-        if (bill) setDelivering(bill);
-      }}>Deliver</button>
+      <div className="flex gap-3">
+        <button className="text-accent" onClick={() => {
+          const bill = bills?.find((b) => b.id === r.bill_id);
+          if (bill) setDelivering(bill);
+        }}>Deliver</button>
+        <button className="text-danger" onClick={() => delFromPending(r)}>Delete</button>
+      </div>
     )},
   ];
 
