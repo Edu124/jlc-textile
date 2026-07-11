@@ -14,12 +14,18 @@ router = APIRouter(prefix="/api/production", tags=["production"],
 STAGES = ["Cutting", "Stitching", "Dyeing", "Finishing", "QC", "Completed"]
 
 
+SIZE_KEYS = ["s", "m", "l", "xl", "xxl", "xxxl", "xxxxl", "mxxl"]
+
+
 class SizeBreakdown(BaseModel):
+    s: float = 0
     m: float = 0
     l: float = 0
     xl: float = 0
     xxl: float = 0
     mxxl: float = 0
+    xxxl: float = 0
+    xxxxl: float = 0
 
 
 @router.get("/next-number")
@@ -204,7 +210,7 @@ def assign_work(body: AssignIn, db: Session = Depends(get_db)):
         raise HTTPException(404, "Design not found")
 
     s = body.sizes
-    size_total = (s.m + s.l + s.xl + s.xxl + s.mxxl) if s else 0
+    size_total = sum(getattr(s, k) for k in SIZE_KEYS) if s else 0
     given = body.metres if body.metres > 0 else body.pieces
     if given <= 0 and size_total <= 0:
         raise HTTPException(400, "Enter metres or pieces to give")
@@ -230,8 +236,7 @@ def assign_work(body: AssignIn, db: Session = Depends(get_db)):
         material_type_id=mat.id, tailor_name=tailor.name, tailor_type=ttype,
         qty_given=given, qty_returned=0, target_pieces=target,
         colors=_colors_json(body.colors), additional=_additional_json(body.additional),
-        size_m=s.m if s else 0, size_l=s.l if s else 0, size_xl=s.xl if s else 0,
-        size_xxl=s.xxl if s else 0, size_mxxl=s.mxxl if s else 0)
+        **{f"size_{k}": (getattr(s, k) if s else 0) for k in SIZE_KEYS})
     db.add(job); db.commit(); db.refresh(job)
     return _job_dict(db, job)
 
@@ -290,9 +295,7 @@ def assign_from_work(body: AssignFromWorkIn, db: Session = Depends(get_db)):
             tailor_type="final", qty_given=given, qty_returned=0,
             target_pieces=target, parent_job_id=w.id,
             colors=_colors_json(body.colors), additional=_additional_json(body.additional),
-            size_m=s.m if (s and first) else 0, size_l=s.l if (s and first) else 0,
-            size_xl=s.xl if (s and first) else 0, size_xxl=s.xxl if (s and first) else 0,
-            size_mxxl=s.mxxl if (s and first) else 0)
+            **{f"size_{k}": (getattr(s, k) if (s and first) else 0) for k in SIZE_KEYS})
         db.add(job); db.flush()
         w.assigned_pieces = (w.assigned_pieces or 0) + take_p
         w.assigned_metres = (w.assigned_metres or 0) + take_m
@@ -368,8 +371,7 @@ def _job_dict(db, j):
             "ready_metres": max(0, delivered_metres - (j.assigned_metres or 0)),
             "parent_job_id": j.parent_job_id, "colors": _colors_out(j.colors),
             "additional": json.loads(j.additional) if j.additional else [],
-            "sizes": {"m": j.size_m or 0, "l": j.size_l or 0, "xl": j.size_xl or 0,
-                      "xxl": j.size_xxl or 0, "mxxl": j.size_mxxl or 0},
+            "sizes": {k: getattr(j, f"size_{k}") or 0 for k in SIZE_KEYS},
             "created_at": j.created_at.isoformat()[:10] if j.created_at else ""}
 
 
@@ -377,8 +379,7 @@ def _delivery_dict(d):
     return {"id": d.id, "delivery_date": d.delivery_date, "pieces": d.pieces or 0,
             "metres": d.metres or 0,
             "image": d.image_path, "notes": d.notes or "",
-            "sizes": {"m": d.size_m or 0, "l": d.size_l or 0, "xl": d.size_xl or 0,
-                      "xxl": d.size_xxl or 0, "mxxl": d.size_mxxl or 0},
+            "sizes": {k: getattr(d, f"size_{k}") or 0 for k in SIZE_KEYS},
             "created_at": d.created_at.isoformat()[:16] if d.created_at else ""}
 
 
@@ -493,7 +494,7 @@ def add_delivery(job_id: int, body: DeliveryIn, db: Session = Depends(get_db)):
     if not j:
         raise HTTPException(404, "Not found")
     s = body.sizes
-    size_total = (s.m + s.l + s.xl + s.xxl + s.mxxl) if s else 0
+    size_total = sum(getattr(s, k) for k in SIZE_KEYS) if s else 0
     pieces = size_total if size_total > 0 else body.pieces
     metres = max(0.0, body.metres or 0)
     if pieces <= 0 and metres <= 0:
@@ -502,8 +503,7 @@ def add_delivery(job_id: int, body: DeliveryIn, db: Session = Depends(get_db)):
         job_id=job_id, delivery_date=body.delivery_date or date.today().isoformat(),
         pieces=pieces, metres=metres,
         image_path=body.image_base64, notes=(body.notes or "").strip(),
-        size_m=s.m if s else 0, size_l=s.l if s else 0, size_xl=s.xl if s else 0,
-        size_xxl=s.xxl if s else 0, size_mxxl=s.mxxl if s else 0)
+        **{f"size_{k}": (getattr(s, k) if s else 0) for k in SIZE_KEYS})
     db.add(d)
 
     # Pieces returned from a FINAL tailor become finished goods straight away.
@@ -544,7 +544,7 @@ def assign_to_final(job_id: int, body: AssignFinalIn, db: Session = Depends(get_
         raise HTTPException(400, "Enter the final tailor's name")
 
     s = body.sizes
-    size_total = (s.m + s.l + s.xl + s.xxl + s.mxxl) if s else 0
+    size_total = sum(getattr(s, k) for k in SIZE_KEYS) if s else 0
     pieces = size_total if size_total > 0 else body.pieces
     if pieces <= 0:
         raise HTTPException(400, "Enter pieces to assign")
@@ -558,8 +558,7 @@ def assign_to_final(job_id: int, body: AssignFinalIn, db: Session = Depends(get_
         material_type_id=w.material_type_id, tailor_name=body.tailor_name.strip(),
         tailor_type="final", qty_given=pieces, qty_returned=0,
         target_pieces=pieces, parent_job_id=w.id,
-        size_m=s.m if s else 0, size_l=s.l if s else 0, size_xl=s.xl if s else 0,
-        size_xxl=s.xxl if s else 0, size_mxxl=s.mxxl if s else 0)
+        **{f"size_{k}": (getattr(s, k) if s else 0) for k in SIZE_KEYS})
     db.add(f)
     w.assigned_pieces = (w.assigned_pieces or 0) + pieces
     db.commit(); db.refresh(f)

@@ -7,7 +7,7 @@ import { rupee, num } from "../lib/format.js";
 import { StatCard, Card, Badge, EmptyState, Modal, Spinner } from "../components/ui.jsx";
 
 const PIE = ["#5E7E9B", "#5FB07C", "#D9A45B", "#D9685F", "#7FA8B8", "#9B85B0"];
-const SIZES = [["m", "M"], ["l", "L"], ["xl", "XL"], ["xxl", "XXL"], ["mxxl", "M-XXL"]];
+const SIZES = [["s", "S"], ["m", "M"], ["l", "L"], ["xl", "XL"], ["xxl", "XXL"], ["xxxl", "3XL"], ["xxxxl", "4XL"], ["mxxl", "M-XXL"]];
 
 export default function Dashboard() {
   const { data: a } = useFetch("/api/dashboard/analytics");

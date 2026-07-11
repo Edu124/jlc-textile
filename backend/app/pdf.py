@@ -215,11 +215,12 @@ def generate_challan_pdf(db: Session, job_id: int) -> bytes:
     story.append(Spacer(1, 5 * mm))
 
     z = lambda v: f"{v:,.0f}" if v else ""
+    _sz = ["s", "m", "l", "xl", "xxl", "xxxl", "xxxxl", "mxxl"]
     sizes = Table([
-        ["M", "L", "XL", "XXL", "M-XXL", "TOTAL"],
-        [z(job.size_m), z(job.size_l), z(job.size_xl), z(job.size_xxl), z(job.size_mxxl),
-         z((job.size_m or 0) + (job.size_l or 0) + (job.size_xl or 0) + (job.size_xxl or 0) + (job.size_mxxl or 0))],
-    ], colWidths=[30 * mm, 30 * mm, 30 * mm, 30 * mm, 31 * mm, 31 * mm])
+        ["S", "M", "L", "XL", "XXL", "3XL", "4XL", "M-XXL", "TOTAL"],
+        [*(z(getattr(job, f"size_{k}")) for k in _sz),
+         z(sum((getattr(job, f"size_{k}") or 0) for k in _sz))],
+    ], colWidths=[20 * mm] * 8 + [22 * mm])
     sizes.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (-1, 0), FONT_BOLD), ("BACKGROUND", (0, 0), (-1, 0), COL_HEADBG),
         ("FONTNAME", (0, 1), (-1, 1), FONT), ("FONTSIZE", (0, 0), (-1, -1), 10),
@@ -345,19 +346,20 @@ def generate_sales_pdf(db: Session, bill_id: int, show_amounts: bool = False,
 
     # Amount column is optional (chosen when generating). The bottom line only
     # ever shows the total QUANTITY — never a money total.
+    size_hdrs = ["S", "M", "L", "XL", "XXL", "3XL", "4XL", "M-XXL"]
+    size_keys = ["qty_s", "qty_m", "qty_l", "qty_xl", "qty_xxl", "qty_xxxl", "qty_xxxxl", "qty_mxxl"]
     if show_amounts:
-        col_w = [10 * mm, 42 * mm, 16 * mm, 16 * mm, 16 * mm, 16 * mm, 20 * mm, 18 * mm, 32 * mm]
-        data = [["Sr.", "Design No.", "M", "L", "XL", "XXL", "M-XXL", "", "Amount"]]
+        col_w = [8 * mm, 30 * mm] + [13 * mm] * 8 + [12 * mm, 32 * mm]
+        data = [["Sr.", "Design No."] + size_hdrs + ["", "Amount"]]
     else:
-        col_w = [12 * mm, 62 * mm, 18 * mm, 18 * mm, 18 * mm, 18 * mm, 22 * mm, 18 * mm]
-        data = [["Sr.", "Design No.", "M", "L", "XL", "XXL", "M-XXL", ""]]
+        col_w = [10 * mm, 44 * mm] + [14 * mm] * 8 + [20 * mm]
+        data = [["Sr.", "Design No."] + size_hdrs + [""]]
     z = lambda v: str(int(v)) if v else ""
     total_qty = 0
     for i in range(20):
         if i < len(items):
             it = items[i]; total_qty += it.row_qty or 0
-            row = [str(i + 1), it.design_no or "", z(it.qty_m), z(it.qty_l),
-                   z(it.qty_xl), z(it.qty_xxl), z(it.qty_mxxl), ""]
+            row = [str(i + 1), it.design_no or ""] + [z(getattr(it, k)) for k in size_keys] + [""]
             if show_amounts:
                 row.append(f"{it.amount:,.0f}" if it.amount else "")
             data.append(row)

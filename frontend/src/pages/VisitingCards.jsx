@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import api from "../api";
 import { apiError } from "../lib/useFetch.js";
+import { isNetworkError, queueRequest } from "../lib/offline.js";
 import { PageHeader, Field, Spinner } from "../components/ui.jsx";
 
 // ── Image preprocessing ────────────────────────────────────────────────────────
@@ -11,6 +12,126 @@ async function loadImage(file) {
     i.onerror = rej;
     i.src = URL.createObjectURL(file);
   });
+}
+
+// ── Scanner-style auto-crop (OpenCV) ──────────────────────────────────────────
+// Finds the card's four corners and perspective-straightens it, exactly like a
+// phone document scanner. Falls back to the lightweight box detection below if
+// OpenCV can't find a clean quadrilateral.
+let _cvPromise = null;
+function getCV() {
+  if (!_cvPromise) {
+    _cvPromise = import("@techstark/opencv-js").then(async (m) => {
+      let cv = m.default || m.cv || m;
+      if (cv instanceof Promise) cv = await cv;
+      if (cv.Mat) return cv;
+      return new Promise((res, rej) => {
+        const t = setTimeout(() => rej(new Error("opencv timeout")), 20000);
+        cv.onRuntimeInitialized = () => { clearTimeout(t); res(cv); };
+      });
+    });
+    _cvPromise.catch(() => { _cvPromise = null; });
+  }
+  return _cvPromise;
+}
+
+// Returns a perspective-corrected canvas of just the card, or null.
+async function scanCrop(img) {
+  let cv;
+  try { cv = await getCV(); } catch { return null; }
+  if (!cv?.Mat) return null;
+
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  const S = Math.min(1, 900 / Math.max(iw, ih));
+  const sw = Math.max(1, Math.round(iw * S)), sh = Math.max(1, Math.round(ih * S));
+  const small = document.createElement("canvas");
+  small.width = sw; small.height = sh;
+  small.getContext("2d").drawImage(img, 0, 0, sw, sh);
+
+  const src = cv.imread(small);
+  const gray = new cv.Mat(), blur = new cv.Mat(), edges = new cv.Mat();
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+
+  const polyArea = (p) => Math.abs(
+    p.reduce((a, q, i) => a + q.x * p[(i + 1) % 4].y - p[(i + 1) % 4].x * q.y, 0)) / 2;
+
+  // Pull the best card-shaped contour out of a binary image.
+  const findQuad = (bin) => {
+    const contours = new cv.MatVector(), hier = new cv.Mat();
+    cv.findContours(bin, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    let quad = null, bestA = 0.04 * sw * sh;   // card must fill ≥4% of the frame
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt = contours.get(i);
+      const a = cv.contourArea(cnt);
+      if (a <= bestA || a > 0.95 * sw * sh) continue;
+      const peri = cv.arcLength(cnt, true);
+      const approx = new cv.Mat();
+      cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+      let pts;
+      if (approx.rows === 4 && cv.isContourConvex(approx)) {
+        pts = [];
+        for (let j = 0; j < 4; j++) pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] });
+      } else {
+        // Not a clean 4-gon (rounded corners, glare bites) — use the tightest
+        // rotated rectangle around it instead.
+        const rr = cv.minAreaRect(cnt);
+        pts = cv.RotatedRect.points(rr).map((q) => ({ x: q.x, y: q.y }));
+      }
+      approx.delete();
+      if (polyArea(pts) > 0.96 * sw * sh) continue;   // whole frame ≠ a card
+      bestA = a; quad = pts;
+    }
+    contours.delete(); hier.delete();
+    return quad;
+  };
+
+  // Pass 1: edges (works on any background). Pass 2: Otsu brightness split
+  // (bright card on a dark cover — like a white card on a table).
+  cv.Canny(blur, edges, 40, 120);
+  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+  cv.dilate(edges, edges, kernel, new cv.Point(-1, -1), 2);
+  let quad = findQuad(edges);
+  if (!quad) {
+    const bin = new cv.Mat();
+    cv.threshold(blur, bin, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    cv.morphologyEx(bin, bin, cv.MORPH_CLOSE, kernel);
+    quad = findQuad(bin);
+    bin.delete();
+  }
+  kernel.delete(); src.delete(); gray.delete(); blur.delete(); edges.delete();
+  if (!quad) return null;
+
+  // Order corners tl,tr,br,bl and scale back to the full-resolution photo.
+  const bySum = [...quad].sort((a, b) => (a.x + a.y) - (b.x + b.y));
+  const byDiff = [...quad].sort((a, b) => (a.y - a.x) - (b.y - b.x));
+  const tl = bySum[0], br = bySum[3], tr = byDiff[0], bl = byDiff[3];
+  const P = [tl, tr, br, bl].map((p) => ({ x: p.x / S, y: p.y / S }));
+  if (new Set([tl, tr, br, bl]).size !== 4) return null;
+
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  let W = Math.max(dist(P[0], P[1]), dist(P[3], P[2]));
+  let H = Math.max(dist(P[0], P[3]), dist(P[1], P[2]));
+  if (!W || !H || W / H > 8 || H / W > 8) return null;
+  const cap = Math.min(1, 1600 / Math.max(W, H));
+  W = Math.round(W * cap); H = Math.round(H * cap);
+
+  // Warp from a bounded full-res copy (12 MP photos would blow memory).
+  const FS = Math.min(1, 2200 / Math.max(iw, ih));
+  const full = document.createElement("canvas");
+  full.width = Math.round(iw * FS); full.height = Math.round(ih * FS);
+  full.getContext("2d").drawImage(img, 0, 0, full.width, full.height);
+  const srcFull = cv.imread(full);
+  const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2,
+    P.flatMap((p) => [p.x * FS, p.y * FS]));
+  const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, W, 0, W, H, 0, H]);
+  const M = cv.getPerspectiveTransform(srcTri, dstTri);
+  const out = new cv.Mat();
+  cv.warpPerspective(srcFull, out, M, new cv.Size(W, H), cv.INTER_LINEAR, cv.BORDER_REPLICATE);
+  const outCanvas = document.createElement("canvas");
+  cv.imshow(outCanvas, out);
+  srcFull.delete(); srcTri.delete(); dstTri.delete(); M.delete(); out.delete();
+  return outCanvas;
 }
 
 // Find the card in the photo automatically, so far-away shots scan without
@@ -141,10 +262,11 @@ function colorCrop(img, region, rot = 0) {
 // crops to the detected card first (fractions of the full image), and `rot`
 // (0/90/270) turns a sideways card upright before OCR.
 function preprocess(img, region, rot = 0) {
-  const rx = region ? region.x * img.naturalWidth : 0;
-  const ry = region ? region.y * img.naturalHeight : 0;
-  const rw = region ? region.w * img.naturalWidth : img.naturalWidth;
-  const rh = region ? region.h * img.naturalHeight : img.naturalHeight;
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  const rx = region ? region.x * iw : 0;
+  const ry = region ? region.y * ih : 0;
+  const rw = region ? region.w * iw : iw;
+  const rh = region ? region.h * ih : ih;
   const scale = Math.max(1, 1600 / Math.max(rw, rh));
   const w0 = Math.round(rw * scale), h0 = Math.round(rh * scale);
   const c = document.createElement("canvas");
@@ -235,11 +357,17 @@ function _phoneDigits(line) {
 // Prefer Indian 10-digit mobiles; fall back to any 8-13 digit run (foreign formats).
 function extractPhones(rawText) {
   const indian = [];
-  for (let run of rawText.split("\n").map(_phoneDigits)) {
+  for (let line of rawText.split("\n")) {
+    // "+91 ..." marks exactly where the number starts — drop noise before it
+    const plus = line.search(/\+\s*9\s*1/);
+    if (plus !== -1) line = line.slice(plus);
+    let run = _phoneDigits(line);
     // strip country / trunk prefix ("+91 98765 43210", "098765 43210")
-    if (run.length === 12 && run.startsWith("91")) run = run.slice(2);
+    if (run.length >= 12 && run.startsWith("91") && /^[6-9]/.test(run[2])) run = run.slice(2);
     if (run.length === 11 && run.startsWith("0")) run = run.slice(1);
-    for (let i = 0; i + 10 <= run.length; i++) {
+    // scan windows right-to-left: OCR noise and country codes pile up on the
+    // LEFT of the real number, which sits at the end of the line
+    for (let i = run.length - 10; i >= 0; i--) {
       const chunk = run.slice(i, i + 10);
       if (/^[6-9]/.test(chunk) && !indian.includes(chunk)) { indian.push(chunk); break; }
     }
@@ -353,7 +481,13 @@ export default function VisitingCards() {
       const img = await loadImage(file);
       const Tesseract = await import("tesseract.js");
       const ocr = async (canvas) => {
+        // OCR engine + language data are served from our own /ocr folder so
+        // scanning keeps working with no internet (the service worker caches
+        // them after the first online visit).
         const { data } = await Tesseract.recognize(canvas, "eng", {
+          workerPath: "/ocr/worker.min.js",
+          corePath: "/ocr",
+          langPath: "/ocr",
           logger: (m) => { if (m.status === "recognizing text") setProgress(Math.round(m.progress * 100)); },
         });
         return { text: data.text, conf: data.confidence || 0 };
@@ -366,26 +500,38 @@ export default function VisitingCards() {
         (/[\w.+-]+@[\w-]+\.[\w.\-]+/.test(r.text) ? 15 : 0) +
         (extractPhones(r.text).length ? 10 : 0);
 
-      // Auto-find the card, then refine once inside the crop to shed background.
-      const region = refineRegion(img, detectCard(img));
-      if (region) setImgUrl(colorCrop(img, region, 0));
+      // Scanner-style auto-crop first: find the card's corners and straighten
+      // it (like a phone document scanner). If OpenCV can't lock onto a card,
+      // fall back to the lightweight box detection.
+      let source = img, region = null;
+      try {
+        const warped = await scanCrop(img);
+        if (warped) source = warped;
+      } catch { /* fall back below */ }
+      const cropped = source !== img;
+      if (!cropped) region = refineRegion(img, detectCard(img));
+      if (cropped) setImgUrl(colorCrop(source, null, 0));
+      else if (region) setImgUrl(colorCrop(img, region, 0));
 
-      const portrait = region && region.h * img.naturalHeight > region.w * img.naturalWidth;
+      const sw = source.naturalWidth || source.width, sh = source.naturalHeight || source.height;
+      const portrait = region
+        ? region.h * img.naturalHeight > region.w * img.naturalWidth
+        : sh > sw;
       // Sideways cards: try BOTH 90 and 270 and let confidence decide — never
       // trust just one direction.
-      const rots = region ? (portrait ? [90, 270] : [0]) : [0];
+      const rots = (cropped || region) ? (portrait ? [90, 270] : [0]) : [0];
       let best = null, bestRot = 0;
       for (const rot of rots) {
         setProgress(0);
-        const r = await ocr(preprocess(img, region, rot));
+        const r = await ocr(preprocess(source, region, rot));
         r.q = quality(r);
         if (!best || r.q > best.q) { best = r; bestRot = rot; }
       }
       // Low confidence? Try the remaining rotation(s).
-      if (region && best.conf < 55) {
+      if ((cropped || region) && best.conf < 55) {
         for (const rot of (portrait ? [0] : [90, 270])) {
           setProgress(0);
-          const r = await ocr(preprocess(img, region, rot));
+          const r = await ocr(preprocess(source, region, rot));
           r.q = quality(r);
           if (r.q > best.q) { best = r; bestRot = rot; }
         }
@@ -398,9 +544,11 @@ export default function VisitingCards() {
         if (r.q > best.q) { best = r; bestRot = 0; }
       }
       // Show the upright, tightened card as the final preview.
-      if (region) setImgUrl(colorCrop(img, region, bestRot));
+      if (cropped) setImgUrl(colorCrop(source, null, bestRot));
+      else if (region) setImgUrl(colorCrop(img, region, bestRot));
 
       const text = best.text;
+      window.__jlc_ocr = { text, conf: best.conf, rot: bestRot, cropped };  // debug hook
       setRawText(text);
       const parsed = parseCard(text);
       setForm(parsed);
@@ -415,15 +563,25 @@ export default function VisitingCards() {
   const save = async () => {
     if (!form.name.trim()) return setErr("Enter the shop / company name");
     setBusy(true); setErr("");
+    const body = { name: form.name.trim(), phone: form.phone.trim(),
+                   address: form.address.trim(), email: "", gst_number: "" };
     try {
-      const { data } = await api.post("/api/customers", {
-        name: form.name.trim(), phone: form.phone.trim(),
-        address: form.address.trim(), email: "", gst_number: "" });
+      const { data } = await api.post("/api/customers", body);
       setSaved([{ ...form, id: data.id }, ...saved]);
       setForm({ name: "", phone: "", address: "" });
       setRawText(""); setImgUrl("");
       if (fileRef.current) fileRef.current.value = "";
-    } catch (e) { setErr(apiError(e)); } finally { setBusy(false); }
+    } catch (e) {
+      // No internet: keep the card locally and sync it when back online.
+      if (isNetworkError(e) &&
+          queueRequest({ method: "post", url: "/api/customers", body, label: `Visiting card — ${body.name}` })) {
+        setSaved([{ ...form, id: null, offline: true }, ...saved]);
+        setForm({ name: "", phone: "", address: "" });
+        setRawText(""); setImgUrl("");
+        if (fileRef.current) fileRef.current.value = "";
+        alert("No internet — the card is saved on this device and will sync automatically when the connection returns.");
+      } else setErr(apiError(e));
+    } finally { setBusy(false); }
   };
 
   return (

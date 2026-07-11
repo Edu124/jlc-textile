@@ -92,11 +92,11 @@ def sync_order_from_bill(db: Session, bill, prepared):
     total = 0.0
     for it, row_qty, amount, rates, rep_mrp in prepared:
         rate = (amount / row_qty) if row_qty else 0
+        _SZ = ["s", "m", "l", "xl", "xxl", "xxxl", "xxxxl", "mxxl"]
         db.add(models.OrderItem(order_id=order.id, product_id=it.product_id,
                                 quantity=row_qty, rate=rate, amount=amount,
                                 design_no=getattr(it, "design_no", "") or "",
-                                qty_m=it.qty_m or 0, qty_l=it.qty_l or 0, qty_xl=it.qty_xl or 0,
-                                qty_xxl=it.qty_xxl or 0, qty_mxxl=it.qty_mxxl or 0))
+                                **{f"qty_{k}": getattr(it, f"qty_{k}", 0) or 0 for k in _SZ}))
         total += amount
     order.total_amount = total
 

@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import api from "../api";
 import { useFetch, apiError, openPdf, useAmountLock } from "../lib/useFetch.js";
+import { isNetworkError, queueRequest } from "../lib/offline.js";
 import { rupeeFull, num } from "../lib/format.js";
 import { PageHeader, Table, Modal, Field, Select, Spinner } from "../components/ui.jsx";
 
-const SIZES = [["qty_m", "M"], ["qty_l", "L"], ["qty_xl", "XL"], ["qty_xxl", "XXL"], ["qty_mxxl", "M-XXL"]];
+const SIZES = [["qty_s", "S"], ["qty_m", "M"], ["qty_l", "L"], ["qty_xl", "XL"], ["qty_xxl", "XXL"], ["qty_xxxl", "3XL"], ["qty_xxxxl", "4XL"], ["qty_mxxl", "M-XXL"]];
+const EMPTY_SIZES = { qty_s: "", qty_m: "", qty_l: "", qty_xl: "", qty_xxl: "", qty_xxxl: "", qty_xxxxl: "", qty_mxxl: "" };
 
 export default function Sales() {
   const { data: bills, loading, reload } = useFetch("/api/sales");
@@ -190,7 +192,7 @@ function CustomerSummaryModal({ customerId, onClose }) {
   );
 }
 
-const SIZE_NAME = { qty_m: "M", qty_l: "L", qty_xl: "XL", qty_xxl: "XXL", qty_mxxl: "M-XXL" };
+const SIZE_NAME = { qty_s: "S", qty_m: "M", qty_l: "L", qty_xl: "XL", qty_xxl: "XXL", qty_xxxl: "3XL", qty_xxxxl: "4XL", qty_mxxl: "M-XXL" };
 
 function DeliveryModal({ bill, onClose }) {
   const { data: order, loading, reload } = useFetch(bill.order_id ? `/api/orders/${bill.order_id}` : null, [bill.order_id]);
@@ -251,7 +253,7 @@ function DesignDeliverModal({ orderId, item, onClose, onSaved }) {
   const logs = (allLogs || []).filter((l) => l.order_item_id === item.id);
 
   const hasSizes = SIZES.some(([k]) => it[k] > 0);
-  const [vals, setVals] = useState({ qty_m: "", qty_l: "", qty_xl: "", qty_xxl: "", qty_mxxl: "", flat: "" });
+  const [vals, setVals] = useState({ ...EMPTY_SIZES, flat: "" });
   const [dDate, setDDate] = useState(new Date().toISOString().slice(0, 10));
   const [dRef, setDRef] = useState("");
   const [busy, setBusy] = useState(false);
@@ -276,7 +278,7 @@ function DesignDeliverModal({ orderId, item, onClose, onSaved }) {
     }
     try {
       await api.post(`/api/orders/${orderId}/items/${item.id}/deliver-log`, body);
-      setVals({ qty_m: "", qty_l: "", qty_xl: "", qty_xxl: "", qty_mxxl: "", flat: "" });
+      setVals({ ...EMPTY_SIZES, flat: "" });
       setDRef("");
       refresh();
     } catch (e) { setErr(apiError(e)); } finally { setBusy(false); }
@@ -393,7 +395,7 @@ function NewOrderForm({ onClose, onSaved, billId }) {
 
   // entry row
   const [pid, setPid] = useState("");
-  const [sizes, setSizes] = useState({ qty_m: "", qty_l: "", qty_xl: "", qty_xxl: "", qty_mxxl: "" });
+  const [sizes, setSizes] = useState({ ...EMPTY_SIZES });
 
   const selProduct = products?.find((x) => String(x.id) === String(pid));
   // Available stock per size for the selected design (by name).
@@ -439,7 +441,7 @@ function NewOrderForm({ onClose, onSaved, billId }) {
 
     const amount = computeAmount(p, s);
     setItems([...items, { design_no: p.name, product_id: p.id, ...s, row_qty: rowQty, amount }]);
-    setPid(""); setSizes({ qty_m: "", qty_l: "", qty_xl: "", qty_xxl: "", qty_mxxl: "" }); setErr("");
+    setPid(""); setSizes({ ...EMPTY_SIZES }); setErr("");
   };
 
   const totalQty = items.reduce((a, b) => a + b.row_qty, 0);
@@ -452,13 +454,23 @@ function NewOrderForm({ onClose, onSaved, billId }) {
     const payload = {
       customer_id: Number(customerId), bill_date: billDate, delivery_date: delivery || null,
       reference_no: reference, transport, agent,
-      items: items.map(({ design_no, product_id, qty_m, qty_l, qty_xl, qty_xxl, qty_mxxl }) =>
-        ({ design_no, product_id, qty_m, qty_l, qty_xl, qty_xxl, qty_mxxl })),
+      items: items.map((it) => ({
+        design_no: it.design_no, product_id: it.product_id,
+        ...Object.fromEntries(SIZES.map(([k]) => [k, it[k] || 0])),
+      })),
     };
     try {
       const { data } = billId ? await api.put(`/api/sales/${billId}`, payload) : await api.post("/api/sales", payload);
       onSaved(data.id);   // parent opens the PDF-options popup
-    } catch (e) { setErr(apiError(e)); } finally { setBusy(false); }
+    } catch (e) {
+      // No internet: queue the new order form and sync it later. (Edits of
+      // existing forms still need a connection.)
+      if (!billId && isNetworkError(e) &&
+          queueRequest({ method: "post", url: "/api/sales", body: payload, label: "Order form" })) {
+        alert("No internet — the order form is saved on this device and will sync automatically when the connection returns. (PDF can be printed after it syncs.)");
+        onClose();
+      } else setErr(apiError(e));
+    } finally { setBusy(false); }
   };
 
   return (

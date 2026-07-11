@@ -1,10 +1,12 @@
 import { useState } from "react";
 import api from "../api";
 import { useFetch, apiError } from "../lib/useFetch.js";
+import { isNetworkError, queueRequest } from "../lib/offline.js";
 import { rupeeFull, num } from "../lib/format.js";
 import { PageHeader, Table, Modal, Field, Spinner, StatCard } from "../components/ui.jsx";
 
-const SIZES = [["m", "M"], ["l", "L"], ["xl", "XL"], ["xxl", "XXL"], ["mxxl", "M-XXL"]];
+const SIZES = [["s", "S"], ["m", "M"], ["l", "L"], ["xl", "XL"], ["xxl", "XXL"], ["xxxl", "3XL"], ["xxxxl", "4XL"], ["mxxl", "M-XXL"]];
+const EMPTY_SIZES = { s: "", m: "", l: "", xl: "", xxl: "", xxxl: "", xxxxl: "", mxxl: "" };
 
 export default function FinishedGoods() {
   const { data: rows, loading, reload } = useFetch("/api/finished-goods");
@@ -62,7 +64,7 @@ export default function FinishedGoods() {
 
 function DirectEntry({ onClose, onSaved }) {
   const [name, setName] = useState("");
-  const [sizes, setSizes] = useState({ m: "", l: "", xl: "", xxl: "", mxxl: "" });
+  const [sizes, setSizes] = useState({ ...EMPTY_SIZES });
   const [pieces, setPieces] = useState("");
   const [rate, setRate] = useState("");
   const [image, setImage] = useState(null);
@@ -83,15 +85,22 @@ function DirectEntry({ onClose, onSaved }) {
     const total = sizeTotal > 0 ? sizeTotal : (Number(pieces) || 0);
     if (!(total > 0)) return setErr("Enter pieces");
     setBusy(true); setErr("");
+    const body = {
+      name: name.trim(),
+      ...Object.fromEntries(SIZES.map(([k]) => [k, Number(sizes[k]) || 0])),
+      pieces: Number(pieces) || 0,
+      sale_rate: Number(rate) || 0, image_base64: image };
     try {
-      await api.post("/api/finished-goods/direct", {
-        name: name.trim(),
-        m: Number(sizes.m) || 0, l: Number(sizes.l) || 0, xl: Number(sizes.xl) || 0,
-        xxl: Number(sizes.xxl) || 0, mxxl: Number(sizes.mxxl) || 0,
-        pieces: Number(pieces) || 0,
-        sale_rate: Number(rate) || 0, image_base64: image });
+      await api.post("/api/finished-goods/direct", body);
       onSaved();
-    } catch (e) { setErr(apiError(e)); } finally { setBusy(false); }
+    } catch (e) {
+      // No internet: queue the entry — stock updates once it syncs.
+      if (isNetworkError(e) &&
+          queueRequest({ method: "post", url: "/api/finished-goods/direct", body, label: `Direct entry — ${body.name}` })) {
+        alert("No internet — the entry is saved on this device and will be added to stock automatically when the connection returns.");
+        onClose();
+      } else setErr(apiError(e));
+    } finally { setBusy(false); }
   };
 
   return (
@@ -215,10 +224,8 @@ function DetailModal({ row, onClose }) {
 function EditGood({ row, onClose, onSaved }) {
   const [name, setName] = useState(row.name || "");
   const [rate, setRate] = useState(String(row.sale_rate || ""));
-  const [rates, setRates] = useState({
-    m: String(row.rate_m || ""), l: String(row.rate_l || ""), xl: String(row.rate_xl || ""),
-    xxl: String(row.rate_xxl || ""), mxxl: String(row.rate_mxxl || ""),
-  });
+  const [rates, setRates] = useState(
+    Object.fromEntries(SIZES.map(([k]) => [k, String(row[`rate_${k}`] || "")])));
   const [image, setImage] = useState(row.image || null);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
 
@@ -236,9 +243,7 @@ function EditGood({ row, onClose, onSaved }) {
     try {
       await api.put(`/api/finished-goods/${row.product_id}`, {
         name: name.trim(), sale_rate: Number(rate) || 0,
-        rate_m: Number(rates.m) || 0, rate_l: Number(rates.l) || 0,
-        rate_xl: Number(rates.xl) || 0, rate_xxl: Number(rates.xxl) || 0,
-        rate_mxxl: Number(rates.mxxl) || 0,
+        ...Object.fromEntries(SIZES.map(([k]) => [`rate_${k}`, Number(rates[k]) || 0])),
         image_base64: image || "" });
       onSaved();
     } catch (e) { setErr(apiError(e)); } finally { setBusy(false); }

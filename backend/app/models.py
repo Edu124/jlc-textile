@@ -115,11 +115,14 @@ class TailorJob(Base):
     # Final jobs: the work job they were carved out of.
     parent_job_id = Column(Integer, ForeignKey("tailor_jobs.id"))
     # Optional per-size piece breakdown (how many of each size to make / given).
+    size_s = Column(Float, default=0)
     size_m = Column(Float, default=0)
     size_l = Column(Float, default=0)
     size_xl = Column(Float, default=0)
     size_xxl = Column(Float, default=0)
     size_mxxl = Column(Float, default=0)
+    size_xxxl = Column(Float, default=0)
+    size_xxxxl = Column(Float, default=0)
     product_id = Column(Integer, ForeignKey("products.id"))
     created_at = Column(DateTime, default=_now)
 
@@ -135,11 +138,14 @@ class TailorDelivery(Base):
     pieces = Column(Float, default=0)
     metres = Column(Float, default=0)   # metre-tracked jobs log work in metres
     # Optional per-size breakdown of this delivery (sum = pieces when used).
+    size_s = Column(Float, default=0)
     size_m = Column(Float, default=0)
     size_l = Column(Float, default=0)
     size_xl = Column(Float, default=0)
     size_xxl = Column(Float, default=0)
     size_mxxl = Column(Float, default=0)
+    size_xxxl = Column(Float, default=0)
+    size_xxxxl = Column(Float, default=0)
     image_path = Column(Text)
     notes = Column(Text)
     created_at = Column(DateTime, default=_now)
@@ -159,11 +165,14 @@ class Product(Base):
     unit_id = Column(Integer, ForeignKey("units.id"))
     sale_rate = Column(Float, default=0)        # base rate (fallback for any size)
     # Per-size rates (a 0 here falls back to sale_rate for that size).
+    rate_s = Column(Float, default=0)
     rate_m = Column(Float, default=0)
     rate_l = Column(Float, default=0)
     rate_xl = Column(Float, default=0)
     rate_xxl = Column(Float, default=0)
     rate_mxxl = Column(Float, default=0)
+    rate_xxxl = Column(Float, default=0)
+    rate_xxxxl = Column(Float, default=0)
     description = Column(Text)
     image_path = Column(String)
     # Quantity returned from job-work that is awaiting a rate before it
@@ -249,16 +258,22 @@ class OrderItem(Base):
     design_no = Column(String)
     # Size breakdown (only populated when this item came from a size-grid
     # Order Form; manually-added Order items leave these at 0).
+    qty_s = Column(Float, default=0)
     qty_m = Column(Float, default=0)
     qty_l = Column(Float, default=0)
     qty_xl = Column(Float, default=0)
     qty_xxl = Column(Float, default=0)
     qty_mxxl = Column(Float, default=0)
+    qty_xxxl = Column(Float, default=0)
+    qty_xxxxl = Column(Float, default=0)
+    delivered_s = Column(Float, default=0)
     delivered_m = Column(Float, default=0)
     delivered_l = Column(Float, default=0)
     delivered_xl = Column(Float, default=0)
     delivered_xxl = Column(Float, default=0)
     delivered_mxxl = Column(Float, default=0)
+    delivered_xxxl = Column(Float, default=0)
+    delivered_xxxxl = Column(Float, default=0)
 
 
 class PurchaseBill(Base):
@@ -316,18 +331,24 @@ class SalesBillItem(Base):
     bill_id = Column(Integer, ForeignKey("sales_bills.id"))
     design_no = Column(String)
     product_id = Column(Integer, ForeignKey("products.id"))
+    qty_s = Column(Float, default=0)
     qty_m = Column(Float, default=0)
     qty_l = Column(Float, default=0)
     qty_xl = Column(Float, default=0)
     qty_xxl = Column(Float, default=0)
     qty_mxxl = Column(Float, default=0)
+    qty_xxxl = Column(Float, default=0)
+    qty_xxxxl = Column(Float, default=0)
     # Per-size rate snapshot used on this bill (so totals stay correct even
     # if the product's rates change later).
+    rate_s = Column(Float, default=0)
     rate_m = Column(Float, default=0)
     rate_l = Column(Float, default=0)
     rate_xl = Column(Float, default=0)
     rate_xxl = Column(Float, default=0)
     rate_mxxl = Column(Float, default=0)
+    rate_xxxl = Column(Float, default=0)
+    rate_xxxxl = Column(Float, default=0)
     row_qty = Column(Float, default=0)
     mrp = Column(Float, default=0)       # representative rate (kept for compatibility)
     amount = Column(Float, default=0)
@@ -348,11 +369,14 @@ class OrderDelivery(Base):
     delivery_date = Column(String)
     reference_no = Column(String)   # challan / delivery reference for this batch
     pieces = Column(Float, default=0)
+    size_s = Column(Float, default=0)
     size_m = Column(Float, default=0)
     size_l = Column(Float, default=0)
     size_xl = Column(Float, default=0)
     size_xxl = Column(Float, default=0)
     size_mxxl = Column(Float, default=0)
+    size_xxxl = Column(Float, default=0)
+    size_xxxxl = Column(Float, default=0)
     notes = Column(Text)
     created_at = Column(DateTime, default=_now)
 

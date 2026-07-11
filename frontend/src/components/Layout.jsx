@@ -2,6 +2,7 @@ import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../auth.jsx";
 import PdfPreviewHost from "./PdfPreview.jsx";
+import OfflineBanner from "./OfflineBanner.jsx";
 
 const NAV = [
   { section: "" , items: [
@@ -102,6 +103,7 @@ export default function Layout() {
           <button className="md:hidden text-ink3" onClick={() => setMobileOpen(true)}>☰</button>
           <h1 className="text-lg font-extrabold text-ink">{title}</h1>
         </header>
+        <OfflineBanner />
         <main className="min-h-0 flex-1 overflow-y-auto bg-bg p-4 md:p-6">
           <Outlet />
           <PdfPreviewHost />

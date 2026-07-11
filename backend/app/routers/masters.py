@@ -289,17 +289,23 @@ class ProductIn(BaseModel):
     category_id: Optional[int] = None
     unit_id: Optional[int] = None
     sale_rate: float = 0          # base rate (fallback for sizes with no rate)
+    rate_s: float = 0
     rate_m: float = 0
     rate_l: float = 0
     rate_xl: float = 0
     rate_xxl: float = 0
     rate_mxxl: float = 0
+    rate_xxxl: float = 0
+    rate_xxxxl: float = 0
     description: Optional[str] = ""
 
 
+_RATE_COLS = ["rate_s", "rate_m", "rate_l", "rate_xl", "rate_xxl",
+              "rate_xxxl", "rate_xxxxl", "rate_mxxl"]
+
+
 def _size_rates(p):
-    return {"rate_m": p.rate_m or 0, "rate_l": p.rate_l or 0, "rate_xl": p.rate_xl or 0,
-            "rate_xxl": p.rate_xxl or 0, "rate_mxxl": p.rate_mxxl or 0}
+    return {c: getattr(p, c) or 0 for c in _RATE_COLS}
 
 
 @router.get("/products")
@@ -323,8 +329,8 @@ def list_products(db: Session = Depends(get_db)):
 def _apply_product(p, body: "ProductIn"):
     p.name, p.category_id, p.unit_id = body.name.strip(), body.category_id, body.unit_id
     p.sale_rate, p.description = body.sale_rate, body.description
-    p.rate_m, p.rate_l, p.rate_xl = body.rate_m, body.rate_l, body.rate_xl
-    p.rate_xxl, p.rate_mxxl = body.rate_xxl, body.rate_mxxl
+    for c in _RATE_COLS:
+        setattr(p, c, getattr(body, c))
 
 
 @router.post("/products")

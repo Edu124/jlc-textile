@@ -80,12 +80,18 @@ REASONS = ["Given to tailor", "Given to customer", "Other"]
 TAILOR_TYPES = ["work", "final"]
 
 
+_SZ = ["s", "m", "l", "xl", "xxl", "xxxl", "xxxxl", "mxxl"]
+
+
 class SizeBreakdown(BaseModel):
+    s: float = 0
     m: float = 0
     l: float = 0
     xl: float = 0
     xxl: float = 0
     mxxl: float = 0
+    xxxl: float = 0
+    xxxxl: float = 0
 
 
 class AdjustIn(BaseModel):
@@ -121,15 +127,14 @@ def adjust(material_type_id: int, body: AdjustIn, db: Session = Depends(get_db))
     if body.reason_type == "Given to tailor" and given > 0:
         ttype = body.tailor_type if body.tailor_type in TAILOR_TYPES else "work"
         s = body.sizes
-        size_total = (s.m + s.l + s.xl + s.xxl + s.mxxl) if s else 0
+        size_total = sum(getattr(s, k) for k in _SZ) if s else 0
         # For work jobs the optional size breakdown also seeds the piece target.
         target = size_total if size_total > 0 else (given if ttype == "final" else 0)
         db.add(models.TailorJob(
             material_type_id=material_type_id,
             tailor_name=(body.recipient_name or "").strip() or "Tailor",
             tailor_type=ttype, qty_given=given, qty_returned=0, target_pieces=target,
-            size_m=s.m if s else 0, size_l=s.l if s else 0, size_xl=s.xl if s else 0,
-            size_xxl=s.xxl if s else 0, size_mxxl=s.mxxl if s else 0))
+            **{f"size_{k}": (getattr(s, k) if s else 0) for k in _SZ}))
 
     db.commit()
     return {"ok": True}

@@ -6,10 +6,12 @@ const AuthCtx = createContext(null);
 export function AuthProvider({ children }) {
   const [token, setToken] = useState(() => localStorage.getItem("jlc_token") || "");
 
-  // Dev-only auto-login so local testing skips the login screen.
-  // import.meta.env.DEV is false in production builds, so this never ships.
+  // Dev-only auto-login so local testing skips the login screen. Also enabled
+  // in local production test builds via VITE_LOCAL_AUTOLOGIN=1 (never set on
+  // Railway, so deployed builds always show the login screen).
   useEffect(() => {
-    if (import.meta.env.DEV && !localStorage.getItem("jlc_token")) {
+    if ((import.meta.env.DEV || import.meta.env.VITE_LOCAL_AUTOLOGIN === "1") &&
+        !localStorage.getItem("jlc_token")) {
       const form = new URLSearchParams({ username: "jailaxmi", password: "jlc@2026" });
       api.post("/api/auth/login", form, {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },

@@ -27,14 +27,12 @@ def list_stock(db: Session = Depends(get_db)):
                     "category": cat.name if cat else "",
                     "unit": unit.abbreviation if unit else "", "quantity": qty,
                     "sale_rate": p.sale_rate, "value": qty * (p.sale_rate or 0),
-                    "rate_m": p.rate_m or 0, "rate_l": p.rate_l or 0,
-                    "rate_xl": p.rate_xl or 0, "rate_xxl": p.rate_xxl or 0,
-                    "rate_mxxl": p.rate_mxxl or 0,
+                    **{f"rate_{k}": getattr(p, f"rate_{k}") or 0 for k in SIZE_COLS},
                     "image": p.image_path})
     return out
 
 
-SIZE_COLS = ["m", "l", "xl", "xxl", "mxxl"]
+SIZE_COLS = ["s", "m", "l", "xl", "xxl", "xxxl", "xxxxl", "mxxl"]
 
 
 @router.get("/availability")
@@ -64,8 +62,7 @@ def availability(db: Session = Depends(get_db)):
     sbi = (db.query(models.SalesBillItem, models.Product.name)
            .join(models.Product, models.SalesBillItem.product_id == models.Product.id).all())
     for it, name in sbi:
-        bump(sold, name, {"m": it.qty_m, "l": it.qty_l, "xl": it.qty_xl,
-                          "xxl": it.qty_xxl, "mxxl": it.qty_mxxl})
+        bump(sold, name, {k: getattr(it, f"qty_{k}") or 0 for k in SIZE_COLS})
 
     out = []
     for key in set(received) | set(sold):
@@ -93,7 +90,7 @@ def detail(product_id: int, db: Session = Depends(get_db)):
     if not p:
         raise HTTPException(404, "Not found")
 
-    SIZE_COLS = ["m", "l", "xl", "xxl", "mxxl"]
+    SIZE_COLS = ["s", "m", "l", "xl", "xxl", "xxxl", "xxxxl", "mxxl"]
     # Final-tailor jobs for this design (matched by name).
     jobs = (db.query(models.TailorJob)
             .join(models.RawMaterialType, models.TailorJob.material_type_id == models.RawMaterialType.id)
@@ -138,11 +135,14 @@ def detail(product_id: int, db: Session = Depends(get_db)):
 
 class DirectIn(BaseModel):
     name: str
+    s: float = 0
     m: float = 0
     l: float = 0
     xl: float = 0
     xxl: float = 0
     mxxl: float = 0
+    xxxl: float = 0
+    xxxxl: float = 0
     pieces: float = 0          # used when no size breakdown is given
     sale_rate: Optional[float] = None
     image_base64: Optional[str] = None
@@ -159,7 +159,7 @@ def direct_entry(body: DirectIn, db: Session = Depends(get_db)):
     name = body.name.strip()
     if not name:
         raise HTTPException(400, "Enter the design name")
-    size_total = body.m + body.l + body.xl + body.xxl + body.mxxl
+    size_total = sum(getattr(body, k) for k in SIZE_COLS)
     total = size_total if size_total > 0 else body.pieces
     if total <= 0:
         raise HTTPException(400, "Enter pieces")
@@ -176,7 +176,7 @@ def direct_entry(body: DirectIn, db: Session = Depends(get_db)):
     db.add(models.TailorDelivery(
         job_id=job.id, delivery_date=date.today().isoformat(), pieces=total,
         image_path=body.image_base64,
-        size_m=body.m, size_l=body.l, size_xl=body.xl, size_xxl=body.xxl, size_mxxl=body.mxxl))
+        **{f"size_{k}": getattr(body, k) for k in SIZE_COLS}))
 
     prod = _get_or_create_finished_product(db, name)
     if not job.product_id:
@@ -196,11 +196,14 @@ def direct_entry(body: DirectIn, db: Session = Depends(get_db)):
 class EditIn(BaseModel):
     name: Optional[str] = None
     sale_rate: Optional[float] = None
+    rate_s: Optional[float] = None
     rate_m: Optional[float] = None
     rate_l: Optional[float] = None
     rate_xl: Optional[float] = None
     rate_xxl: Optional[float] = None
     rate_mxxl: Optional[float] = None
+    rate_xxxl: Optional[float] = None
+    rate_xxxxl: Optional[float] = None
     image_base64: Optional[str] = None   # data URL; pass "" to clear
 
 
@@ -226,7 +229,7 @@ def edit_product(product_id: int, body: EditIn, db: Session = Depends(get_db)):
         p.name = new_name
     if body.sale_rate is not None:
         p.sale_rate = body.sale_rate
-    for col in ("rate_m", "rate_l", "rate_xl", "rate_xxl", "rate_mxxl"):
+    for col in ("rate_s", "rate_m", "rate_l", "rate_xl", "rate_xxl", "rate_mxxl", "rate_xxxl", "rate_xxxxl"):
         val = getattr(body, col)
         if val is not None:
             setattr(p, col, val)

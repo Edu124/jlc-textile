@@ -37,13 +37,14 @@ def _run_migrations():
         with engine.begin() as conn:
             if "pending_qty" not in cols:
                 conn.execute(text("ALTER TABLE products ADD COLUMN pending_qty FLOAT DEFAULT 0"))
-            for col in ("rate_m", "rate_l", "rate_xl", "rate_xxl", "rate_mxxl"):
+            for col in ("rate_s", "rate_m", "rate_l", "rate_xl", "rate_xxl", "rate_mxxl", "rate_xxxl", "rate_xxxxl"):
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE products ADD COLUMN {col} FLOAT DEFAULT 0"))
     if insp.has_table("sales_bill_items"):
         cols = {c["name"] for c in insp.get_columns("sales_bill_items")}
         with engine.begin() as conn:
-            for col in ("rate_m", "rate_l", "rate_xl", "rate_xxl", "rate_mxxl"):
+            for col in ("rate_s", "rate_m", "rate_l", "rate_xl", "rate_xxl", "rate_mxxl", "rate_xxxl", "rate_xxxxl",
+                        "qty_s", "qty_xxxl", "qty_xxxxl"):
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE sales_bill_items ADD COLUMN {col} FLOAT DEFAULT 0"))
     if insp.has_table("order_items"):
@@ -53,8 +54,9 @@ def _run_migrations():
                 conn.execute(text("ALTER TABLE order_items ADD COLUMN delivered_qty FLOAT DEFAULT 0"))
             if "design_no" not in cols:
                 conn.execute(text("ALTER TABLE order_items ADD COLUMN design_no VARCHAR"))
-            for col in ("qty_m", "qty_l", "qty_xl", "qty_xxl", "qty_mxxl",
-                        "delivered_m", "delivered_l", "delivered_xl", "delivered_xxl", "delivered_mxxl"):
+            for col in ("qty_s", "qty_m", "qty_l", "qty_xl", "qty_xxl", "qty_mxxl", "qty_xxxl", "qty_xxxxl",
+                        "delivered_s", "delivered_m", "delivered_l", "delivered_xl", "delivered_xxl",
+                        "delivered_mxxl", "delivered_xxxl", "delivered_xxxxl"):
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE order_items ADD COLUMN {col} FLOAT DEFAULT 0"))
     if insp.has_table("sales_bills"):
@@ -75,7 +77,7 @@ def _run_migrations():
     if insp.has_table("tailor_deliveries"):
         cols = {c["name"] for c in insp.get_columns("tailor_deliveries")}
         with engine.begin() as conn:
-            for col in ("size_m", "size_l", "size_xl", "size_xxl", "size_mxxl", "metres"):
+            for col in ("size_s", "size_m", "size_l", "size_xl", "size_xxl", "size_mxxl", "size_xxxl", "size_xxxxl", "metres"):
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE tailor_deliveries ADD COLUMN {col} FLOAT DEFAULT 0"))
     if insp.has_table("tailor_jobs"):
@@ -89,7 +91,7 @@ def _run_migrations():
                 conn.execute(text("ALTER TABLE tailor_jobs ADD COLUMN assigned_pieces FLOAT DEFAULT 0"))
             if "parent_job_id" not in cols:
                 conn.execute(text("ALTER TABLE tailor_jobs ADD COLUMN parent_job_id INTEGER"))
-            for col in ("size_m", "size_l", "size_xl", "size_xxl", "size_mxxl"):
+            for col in ("size_s", "size_m", "size_l", "size_xl", "size_xxl", "size_mxxl", "size_xxxl", "size_xxxxl"):
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE tailor_jobs ADD COLUMN {col} FLOAT DEFAULT 0"))
             if "colors" not in cols:

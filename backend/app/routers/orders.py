@@ -76,12 +76,9 @@ def get_order(order_id: int, db: Session = Depends(get_db)):
                        "design_no": it.design_no or "",
                        "quantity": it.quantity, "rate": it.rate, "amount": it.amount,
                        "delivered_qty": it.delivered_qty or 0,
-                       "has_sizes": bool((it.qty_m or 0) + (it.qty_l or 0) + (it.qty_xl or 0) + (it.qty_xxl or 0) + (it.qty_mxxl or 0)),
-                       "qty_m": it.qty_m or 0, "qty_l": it.qty_l or 0, "qty_xl": it.qty_xl or 0,
-                       "qty_xxl": it.qty_xxl or 0, "qty_mxxl": it.qty_mxxl or 0,
-                       "delivered_m": it.delivered_m or 0, "delivered_l": it.delivered_l or 0,
-                       "delivered_xl": it.delivered_xl or 0, "delivered_xxl": it.delivered_xxl or 0,
-                       "delivered_mxxl": it.delivered_mxxl or 0} for it in items]}
+                       "has_sizes": any((getattr(it, f"qty_{k}") or 0) for k in SIZE_KEYS),
+                       **{f"qty_{k}": getattr(it, f"qty_{k}") or 0 for k in SIZE_KEYS},
+                       **{f"delivered_{k}": getattr(it, f"delivered_{k}") or 0 for k in SIZE_KEYS}} for it in items]}
 
 
 @router.post("")
@@ -146,16 +143,19 @@ def update_status(order_id: int, body: StatusIn, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-SIZE_KEYS = ["m", "l", "xl", "xxl", "mxxl"]
+SIZE_KEYS = ["s", "m", "l", "xl", "xxl", "xxxl", "xxxxl", "mxxl"]
 
 
 class DeliverIn(BaseModel):
     delivered_qty: Optional[float] = None
+    delivered_s: Optional[float] = None
     delivered_m: Optional[float] = None
     delivered_l: Optional[float] = None
     delivered_xl: Optional[float] = None
     delivered_xxl: Optional[float] = None
     delivered_mxxl: Optional[float] = None
+    delivered_xxxl: Optional[float] = None
+    delivered_xxxxl: Optional[float] = None
 
 
 @router.put("/{order_id}/items/{item_id}/deliver")
@@ -188,17 +188,20 @@ def deliver_item(order_id: int, item_id: int, body: DeliverIn, db: Session = Dep
     return {"ok": True, "status": o.status}
 
 
-SIZE_KEYS = ["m", "l", "xl", "xxl", "mxxl"]
+SIZE_KEYS = ["s", "m", "l", "xl", "xxl", "xxxl", "xxxxl", "mxxl"]
 
 
 class DeliverLogIn(BaseModel):
     delivery_date: Optional[str] = None
     reference_no: Optional[str] = ""
+    s: float = 0
     m: float = 0
     l: float = 0
     xl: float = 0
     xxl: float = 0
     mxxl: float = 0
+    xxxl: float = 0
+    xxxxl: float = 0
     notes: Optional[str] = ""
 
 
@@ -285,8 +288,8 @@ def add_delivery_log(order_id: int, item_id: int, body: DeliverLogIn, db: Sessio
         order_id=order_id, order_item_id=item_id, design_no=it.design_no,
         delivery_date=body.delivery_date or date.today().isoformat(), pieces=total,
         reference_no=(body.reference_no or "").strip(),
-        size_m=deltas["m"], size_l=deltas["l"], size_xl=deltas["xl"],
-        size_xxl=deltas["xxl"], size_mxxl=deltas["mxxl"], notes=(body.notes or "").strip()))
+        notes=(body.notes or "").strip(),
+        **{f"size_{k}": deltas[k] for k in SIZE_KEYS}))
     _recompute_status(db, o)
     db.commit()
     return {"ok": True, "status": o.status}

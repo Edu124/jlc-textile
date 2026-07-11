@@ -40,12 +40,10 @@ def analytics(db: Session = Depends(get_db)):
         trend.append({"label": d.strftime("%d/%m"), "value": by_day.get(d.isoformat(), 0)})
 
     # size mix
-    sz = db.query(
-        func.coalesce(func.sum(SBI.qty_m), 0), func.coalesce(func.sum(SBI.qty_l), 0),
-        func.coalesce(func.sum(SBI.qty_xl), 0), func.coalesce(func.sum(SBI.qty_xxl), 0),
-        func.coalesce(func.sum(SBI.qty_mxxl), 0)).one()
+    _sz_keys = ["s", "m", "l", "xl", "xxl", "xxxl", "xxxxl", "mxxl"]
+    sz = db.query(*[func.coalesce(func.sum(getattr(SBI, f"qty_{k}")), 0) for k in _sz_keys]).one()
     size_mix = [{"label": l, "value": float(v)} for l, v in
-                zip(["M", "L", "XL", "XXL", "M-XXL"], sz)]
+                zip(["S", "M", "L", "XL", "XXL", "3XL", "4XL", "M-XXL"], sz)]
 
     # order status
     status_rows = (db.query(O.status, func.count(O.id)).group_by(O.status)

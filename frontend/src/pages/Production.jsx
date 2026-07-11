@@ -158,7 +158,8 @@ function TailorsModal({ onClose }) {
 }
 
 const BASE_COLORS = ["Red", "Blue", "Green", "Yellow", "Pink", "White"];
-const SIZE_LABELS = ["M", "L", "XL", "XXL", "M-XXL"];
+const SIZE_LABELS = ["S", "M", "L", "XL", "XXL", "3XL", "4XL", "M-XXL"];
+const EMPTY_SIZES = { s: "", m: "", l: "", xl: "", xxl: "", xxxl: "", xxxxl: "", mxxl: "" };
 
 function AssignModal({ onClose, onSaved }) {
   const { data: tailors } = useFetch("/api/production/tailors");
@@ -176,7 +177,7 @@ function AssignModal({ onClose, onSaved }) {
   const [colorPcs, setColorPcs] = useState("");
   const [colorItems, setColorItems] = useState([]);
   const [savedCustom, setSavedCustom] = useState([]);   // custom colors from Settings
-  const [sizes, setSizes] = useState({ m: "", l: "", xl: "", xxl: "", mxxl: "" });
+  const [sizes, setSizes] = useState({ ...EMPTY_SIZES });
   const [takes, setTakes] = useState({});          // work job id -> qty taken
   const [addDesc, setAddDesc] = useState("");
   const [addMetres, setAddMetres] = useState("");
@@ -448,7 +449,7 @@ function AssignModal({ onClose, onSaved }) {
   );
 }
 
-const SIZES = [["m", "M"], ["l", "L"], ["xl", "XL"], ["xxl", "XXL"], ["mxxl", "M-XXL"]];
+const SIZES = [["s", "S"], ["m", "M"], ["l", "L"], ["xl", "XL"], ["xxl", "XXL"], ["xxxl", "3XL"], ["xxxxl", "4XL"], ["mxxl", "M-XXL"]];
 
 function TrackJob({ job, onClose, onChanged }) {
   const { data: deliveries, reload: reloadDeliveries } = useFetch(`/api/production/jobs/${job.id}/deliveries`);
@@ -459,7 +460,7 @@ function TrackJob({ job, onClose, onChanged }) {
   const [savingTarget, setSavingTarget] = useState(false);
 
   const [pieces, setPieces] = useState("");
-  const [sizes, setSizes] = useState({ m: "", l: "", xl: "", xxl: "", mxxl: "" });
+  const [sizes, setSizes] = useState({ ...EMPTY_SIZES });
   const [dDate, setDDate] = useState(new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
   const [image, setImage] = useState(null);
@@ -499,7 +500,7 @@ function TrackJob({ job, onClose, onChanged }) {
         delivery_date: dDate, pieces: pieceMode ? (Number(pieces) || 0) : 0,
         metres: pieceMode ? 0 : (Number(metres) || 0),
         sizes: pieceMode && sizeTotal > 0 ? sizeObj : null, image_base64: image, notes });
-      setPieces(""); setMetres(""); setSizes({ m: "", l: "", xl: "", xxl: "", mxxl: "" }); setNotes(""); setImage(null);
+      setPieces(""); setMetres(""); setSizes({ ...EMPTY_SIZES }); setNotes(""); setImage(null);
       refreshAll();
     } catch (e) { setErr(apiError(e)); } finally { setBusy(false); }
   };
