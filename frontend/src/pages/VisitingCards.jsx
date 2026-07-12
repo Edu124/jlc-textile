@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import api from "../api";
 import { apiError } from "../lib/useFetch.js";
 import { isNetworkError, queueRequest } from "../lib/offline.js";
@@ -26,7 +26,7 @@ function getCV() {
       if (cv instanceof Promise) cv = await cv;
       if (cv.Mat) return cv;
       return new Promise((res, rej) => {
-        const t = setTimeout(() => rej(new Error("opencv timeout")), 20000);
+        const t = setTimeout(() => rej(new Error("opencv timeout")), 60000);
         cv.onRuntimeInitialized = () => { clearTimeout(t); res(cv); };
       });
     });
@@ -470,6 +470,11 @@ export default function VisitingCards() {
   const [rawText, setRawText] = useState("");
   const [form, setForm] = useState({ name: "", phone: "", address: "" });
   const [err, setErr] = useState(""); const [saved, setSaved] = useState([]);
+  const [autoCrop, setAutoCrop] = useState(null);   // true | false after a scan
+
+  // Start loading the scanner engine the moment the page opens, so the first
+  // scan doesn't have to wait for the (large, one-time) download.
+  useEffect(() => { getCV().catch(() => {}); }, []);
 
   const onFile = async (e) => {
     const file = e.target.files?.[0];
@@ -509,6 +514,7 @@ export default function VisitingCards() {
         if (warped) source = warped;
       } catch { /* fall back below */ }
       const cropped = source !== img;
+      setAutoCrop(cropped);
       if (!cropped) region = refineRegion(img, detectCard(img));
       if (cropped) setImgUrl(colorCrop(source, null, 0));
       else if (region) setImgUrl(colorCrop(img, region, 0));
@@ -599,6 +605,12 @@ export default function VisitingCards() {
 
           {imgUrl && (
             <img src={imgUrl} alt="card" className="mt-4 max-h-64 rounded-xl border border-separator object-contain" />
+          )}
+          {imgUrl && !scanning && autoCrop === false && (
+            <p className="mt-2 text-xs text-amber-400">
+              Couldn't find the card's edges — read the full photo instead. For auto-zoom,
+              place the card on a plain background with all four corners in the frame.
+            </p>
           )}
           {scanning && (
             <div className="mt-3">
