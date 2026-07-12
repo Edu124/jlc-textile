@@ -125,46 +125,19 @@ IMPORT_HEADERS = {
 }
 
 
-@router.post("/customers/import")
-async def import_customers(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """Bulk-add customers from an Excel (.xlsx) or CSV file. The first row can
-    be headings (Name / Phone / Email / Address / GST in any order); without
-    headings the columns are taken as: Name, Phone, Email, Address, GST."""
-    fname = (file.filename or "").lower()
-    content = await file.read()
+def _cell(c):
+    if c is None:
+        return ""
+    # Excel stores phone numbers as numbers — avoid "9876543210.0"
+    if isinstance(c, float) and c.is_integer():
+        return str(int(c))
+    return str(c).strip()
 
-    def _cell(c):
-        if c is None:
-            return ""
-        # Excel stores phone numbers as numbers — avoid "9876543210.0"
-        if isinstance(c, float) and c.is_integer():
-            return str(int(c))
-        return str(c).strip()
 
-    rows = []
-    if fname.endswith(".xls"):
-        raise HTTPException(400, "This is an old Excel format (.xls). Open the file and use "
-                                 "'Save As' → Excel Workbook (.xlsx), then upload again.")
-    if fname.endswith((".xlsx", ".xlsm")):
-        from openpyxl import load_workbook
-        try:
-            wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-        except Exception:
-            raise HTTPException(400, "Could not read this Excel file — save it as .xlsx and try again")
-        # Read the first sheet that actually has data (files often carry an
-        # empty Sheet1 in front of the real list).
-        for ws in wb.worksheets:
-            sheet_rows = [[_cell(c) for c in r] for r in ws.iter_rows(values_only=True)]
-            sheet_rows = [r for r in sheet_rows if any(c for c in r)]
-            if sheet_rows:
-                rows = sheet_rows
-                break
-    elif fname.endswith(".csv"):
-        text = content.decode("utf-8-sig", errors="replace")
-        rows = [[(c or "").strip() for c in r] for r in csv.reader(io.StringIO(text))]
-    else:
-        raise HTTPException(400, "Upload an Excel (.xlsx) or CSV file")
-
+def _run_customer_import(raw_rows, db):
+    """Shared import core: takes raw cell rows (any mix of str/number/None),
+    maps headings, inserts customers, returns the result summary."""
+    rows = [[_cell(c) for c in r] for r in raw_rows]
     rows = [r for r in rows if any(c for c in r)]
     if not rows:
         raise HTTPException(400, "The file is empty")
@@ -208,6 +181,56 @@ async def import_customers(file: UploadFile = File(...), db: Session = Depends(g
     db.commit()
     return {"added": added, "skipped_duplicate": dup, "skipped_no_name": invalid,
             "names": added_names}
+
+
+class ImportRowsIn(BaseModel):
+    rows: list
+
+
+@router.post("/customers/import-rows")
+def import_customer_rows(body: ImportRowsIn, db: Session = Depends(get_db)):
+    """Bulk-add customers from rows already parsed on the device (the app reads
+    the Excel locally and sends only the cell values — heavy files with logos
+    and formatting never travel over the network)."""
+    if len(body.rows) > 50000:
+        raise HTTPException(400, "Too many rows — split the file and import in parts")
+    rows = [r if isinstance(r, list) else [r] for r in body.rows]
+    return _run_customer_import(rows, db)
+
+
+@router.post("/customers/import")
+async def import_customers(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Bulk-add customers from an Excel (.xlsx) or CSV file. The first row can
+    be headings (Name / Phone / Email / Address / GST in any order); without
+    headings the columns are taken as: Name, Phone, Email, Address, GST."""
+    fname = (file.filename or "").lower()
+    content = await file.read()
+
+    rows = []
+    if fname.endswith(".xls"):
+        raise HTTPException(400, "This is an old Excel format (.xls). Open the file and use "
+                                 "'Save As' → Excel Workbook (.xlsx), then upload again.")
+    if fname.endswith((".xlsx", ".xlsm")):
+        from openpyxl import load_workbook
+        try:
+            wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        except Exception:
+            raise HTTPException(400, "Could not read this Excel file — save it as .xlsx and try again")
+        # Read the first sheet that actually has data (files often carry an
+        # empty Sheet1 in front of the real list).
+        for ws in wb.worksheets:
+            sheet_rows = [[_cell(c) for c in r] for r in ws.iter_rows(values_only=True)]
+            sheet_rows = [r for r in sheet_rows if any(c for c in r)]
+            if sheet_rows:
+                rows = sheet_rows
+                break
+    elif fname.endswith(".csv"):
+        text = content.decode("utf-8-sig", errors="replace")
+        rows = [[(c or "").strip() for c in r] for r in csv.reader(io.StringIO(text))]
+    else:
+        raise HTTPException(400, "Upload an Excel (.xlsx) or CSV file")
+
+    return _run_customer_import(rows, db)
 
 
 @router.get("/customers/{pid}/summary")

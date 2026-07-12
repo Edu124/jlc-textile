@@ -13,10 +13,30 @@ export default function ImportCustomers() {
     const file = e.target.files?.[0];
     if (!file) return;
     setErr(""); setResult(null); setBusy(true);
-    const form = new FormData();
-    form.append("file", file);
     try {
-      const { data } = await api.post("/api/customers/import", form);
+      // Read the Excel ON THIS DEVICE and send only the cell values — a heavy
+      // file full of logos and formatting becomes a few KB over the network.
+      // This also reads old .xls files. If local parsing fails for any reason,
+      // fall back to uploading the raw file for the server to read.
+      let rows = null;
+      try {
+        const XLSX = await import("xlsx");
+        const wb = XLSX.read(await file.arrayBuffer());
+        for (const name of wb.SheetNames) {
+          const sheet = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "" });
+          const filled = sheet.filter((r) => r.some((c) => String(c).trim() !== ""));
+          if (filled.length) { rows = filled; break; }
+        }
+      } catch { rows = null; }
+
+      let data;
+      if (rows && rows.length) {
+        ({ data } = await api.post("/api/customers/import-rows", { rows }));
+      } else {
+        const form = new FormData();
+        form.append("file", file);
+        ({ data } = await api.post("/api/customers/import", form));
+      }
       setResult(data);
     } catch (ex) { setErr(apiError(ex)); }
     finally {
@@ -37,7 +57,7 @@ export default function ImportCustomers() {
           Without headings, columns are read in that same order. Only Name is required.
           Customers that already exist (same name) are skipped, never duplicated.
         </p>
-        <input ref={fileRef} type="file" accept=".xlsx,.xlsm,.csv" onChange={onFile}
+        <input ref={fileRef} type="file" accept=".xlsx,.xlsm,.xls,.csv" onChange={onFile}
                className="hidden" id="import-input" />
         <label htmlFor="import-input" className="btn-primary inline-flex cursor-pointer items-center gap-2">
           {busy ? <Spinner /> : "⬆ Choose Excel / CSV File"}
