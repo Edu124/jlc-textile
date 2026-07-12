@@ -3,23 +3,49 @@ import api from "../api";
 import { apiError } from "../lib/useFetch.js";
 import { PageHeader, Card, Spinner } from "../components/ui.jsx";
 
+const NAME_HEADINGS = ["name", "customer", "party", "shop"];
+const PHONE_HEADINGS = ["phone", "mobile", "contact", "number", "no."];
+
 export default function ImportCustomers() {
   const fileRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState("");
   const [gsUrl, setGsUrl] = useState("");
+  const [namesText, setNamesText] = useState("");
+  const [numbersText, setNumbersText] = useState("");
 
-  const importSheet = async () => {
-    if (!gsUrl.trim()) return setErr("Paste the Google Sheets link first");
+  // ── Copy & Paste (two columns) ──────────────────────────────────────────────
+  // Lines are paired by position: 1st name ↔ 1st number, and so on. Empty
+  // lines are kept while pairing so a blank phone cell in the sheet doesn't
+  // shift every number after it onto the wrong customer.
+  const rawNames = namesText.split(/\r?\n/).map((s) => s.trim());
+  const rawNums = numbersText.split(/\r?\n/).map((s) => s.trim());
+  while (rawNames.length && !rawNames[rawNames.length - 1]) rawNames.pop();
+  while (rawNums.length && !rawNums[rawNums.length - 1]) rawNums.pop();
+  // If they copied the headings too ("Name" / "Phone"), drop that first line.
+  const nameStart = rawNames.length && NAME_HEADINGS.some((w) => rawNames[0].toLowerCase().includes(w)) ? 1 : 0;
+  const numStart = rawNums.length && PHONE_HEADINGS.some((w) => rawNums[0].toLowerCase().includes(w)) ? 1 : 0;
+  const names = rawNames.slice(nameStart);
+  const nums = rawNums.slice(numStart);
+  const pairs = names
+    .map((n, i) => [n, (nums[i] || "").replace(/[^\d+\/ ]/g, "").trim()])
+    .filter(([n]) => n);
+  const extraNums = Math.max(0, nums.length - names.length);
+
+  const importPasted = async () => {
+    if (!pairs.length) return setErr("Paste the names in the left box first");
     setErr(""); setResult(null); setBusy(true);
     try {
-      const { data } = await api.post("/api/customers/import-gsheet", { url: gsUrl.trim() });
-      setResult(data); setGsUrl("");
+      // Explicit heading row so the server pairs the columns exactly as shown.
+      const { data } = await api.post("/api/customers/import-rows",
+        { rows: [["Name", "Phone"], ...pairs] });
+      setResult(data); setNamesText(""); setNumbersText("");
     } catch (ex) { setErr(apiError(ex)); }
     finally { setBusy(false); }
   };
 
+  // ── Excel / CSV file ────────────────────────────────────────────────────────
   const onFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -56,11 +82,60 @@ export default function ImportCustomers() {
     }
   };
 
+  // ── Google Sheets link ──────────────────────────────────────────────────────
+  const importSheet = async () => {
+    if (!gsUrl.trim()) return setErr("Paste the Google Sheets link first");
+    setErr(""); setResult(null); setBusy(true);
+    try {
+      const { data } = await api.post("/api/customers/import-gsheet", { url: gsUrl.trim() });
+      setResult(data); setGsUrl("");
+    } catch (ex) { setErr(apiError(ex)); }
+    finally { setBusy(false); }
+  };
+
   return (
     <div className="max-w-2xl">
-      <PageHeader title="Import Customers" subtitle="Upload an Excel or CSV file and every customer in it gets added to your Customers list" />
+      <PageHeader title="Import Customers" subtitle="Paste your list, upload an Excel file, or use a Google Sheets link — every customer gets added to your Customers list" />
 
-      <Card title="Upload File">
+      <Card title="Copy & Paste — easiest">
+        <p className="mb-3 text-sm text-ink2">
+          In your Excel or Sheet: select the <b>whole Names column</b>, copy, and paste it in the
+          left box. Then copy the <b>whole Numbers column</b> and paste it in the right box.
+          The 1st name goes with the 1st number, the 2nd with the 2nd, and so on.
+        </p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="label">Customer Names</label>
+            <textarea className="input font-mono text-sm" rows={8}
+                      placeholder={"Krishna Fashion\nBombay Textiles\nMeena Collection"}
+                      value={namesText} onChange={(e) => setNamesText(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Phone Numbers</label>
+            <textarea className="input font-mono text-sm" rows={8}
+                      placeholder={"9876543210\n9876543211\n9876543212"}
+                      value={numbersText} onChange={(e) => setNumbersText(e.target.value)} />
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button className="btn-primary" onClick={importPasted} disabled={busy || !pairs.length}>
+            {busy ? <Spinner /> : `Add ${pairs.length || ""} Customer${pairs.length === 1 ? "" : "s"}`}
+          </button>
+          {pairs.length > 0 && (
+            <span className="text-xs text-muted">
+              First one: <b className="text-ink2">{pairs[0][0]}</b>{pairs[0][1] && <> — {pairs[0][1]}</>}
+            </span>
+          )}
+        </div>
+        {extraNums > 0 && (
+          <p className="mt-2 text-xs text-amber-400">
+            There are {extraNums} more number{extraNums === 1 ? "" : "s"} than names — check that
+            both boxes start from the same row.
+          </p>
+        )}
+      </Card>
+
+      <Card title="Or upload an Excel / CSV file" className="mt-4">
         <p className="mb-1 text-sm text-ink2">
           The first row can be headings — <b>Name, Phone, Email, Address, GST</b> in any order.
         </p>
