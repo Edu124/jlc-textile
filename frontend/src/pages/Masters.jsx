@@ -2,13 +2,23 @@ import { useEffect, useState } from "react";
 import api from "../api";
 import { useFetch, apiError } from "../lib/useFetch.js";
 import { rupeeFull } from "../lib/format.js";
+import { pendingCustomers } from "../lib/offline.js";
 import { PageHeader, Table, Modal, Field, Select, Spinner } from "../components/ui.jsx";
 
 /** Generic master CRUD screen.
- * fields: [{name, label, type, required, optionsFrom, optionLabel}] */
-function CrudPage({ title, subtitle, endpoint, columns, fields, itemName }) {
+ * fields: [{name, label, type, required, optionsFrom, optionLabel}]
+ * pendingRows: () => rows saved offline & not yet synced (shown with a badge) */
+function CrudPage({ title, subtitle, endpoint, columns, fields, itemName, pendingRows }) {
   const { data: rows, loading, reload } = useFetch(endpoint);
   const [editing, setEditing] = useState(null); // null=closed, {}=new, {..}=edit
+  const [, setTick] = useState(0);              // refresh when the sync queue changes
+
+  useEffect(() => {
+    if (!pendingRows) return;
+    const onQueue = () => { setTick((t) => t + 1); reload(); };
+    window.addEventListener("jlc-queue-changed", onQueue);
+    return () => window.removeEventListener("jlc-queue-changed", onQueue);
+  }, [pendingRows, reload]);
 
   const del = async (id, name) => {
     if (!confirm(`Delete "${name}"?`)) return;
@@ -18,19 +28,22 @@ function CrudPage({ title, subtitle, endpoint, columns, fields, itemName }) {
 
   const cols = [
     ...columns,
-    { header: "Actions", cell: (r) => (
+    { header: "Actions", cell: (r) => r.pending ? (
+      <span className="text-xs text-amber-400">⟳ will sync when online</span>
+    ) : (
       <div className="flex gap-3">
         <button className="text-accent" onClick={() => setEditing(r)}>Edit</button>
         <button className="text-danger" onClick={() => del(r.id, r.name)}>Delete</button>
       </div>
     )},
   ];
+  const allRows = [...(pendingRows ? pendingRows() : []), ...(rows || [])];
 
   return (
     <div>
       <PageHeader title={title} subtitle={subtitle}
         action={<button className="btn-primary" onClick={() => setEditing({})}>+ Add {itemName}</button>} />
-      {loading ? <Spinner /> : <Table columns={cols} rows={rows} empty={`No ${title.toLowerCase()} yet`} />}
+      {loading ? <Spinner /> : <Table columns={cols} rows={allRows} empty={`No ${title.toLowerCase()} yet`} />}
       {editing !== null && (
         <CrudForm endpoint={endpoint} fields={fields} itemName={itemName}
           initial={editing} onClose={() => setEditing(null)}
@@ -124,7 +137,7 @@ export const Suppliers = () => (
 );
 export const Customers = () => (
   <CrudPage title="Customers" itemName="Customer" endpoint="/api/customers"
-            columns={PARTY_COLS} fields={PARTY_FIELDS} />
+            columns={PARTY_COLS} fields={PARTY_FIELDS} pendingRows={pendingCustomers} />
 );
 
 export const MaterialTypes = () => (

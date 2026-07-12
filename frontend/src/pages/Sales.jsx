@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import api from "../api";
 import { useFetch, apiError, openPdf, useAmountLock } from "../lib/useFetch.js";
-import { isNetworkError, queueRequest } from "../lib/offline.js";
+import { isNetworkError, queueRequest, pendingCustomers, pendingOrderForms, removeQueued } from "../lib/offline.js";
 import { rupeeFull, num } from "../lib/format.js";
 import { PageHeader, Table, Modal, Field, Select, Spinner } from "../components/ui.jsx";
 
@@ -14,6 +14,24 @@ export default function Sales() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [delivering, setDelivering] = useState(null);
+  const [, setTick] = useState(0);
+
+  // Order forms saved offline appear at the top of the list; when the sync
+  // queue changes (an entry synced or was queued) refresh both views.
+  useEffect(() => {
+    const onQueue = () => { setTick((t) => t + 1); reload(); reloadPending(); };
+    window.addEventListener("jlc-queue-changed", onQueue);
+    return () => window.removeEventListener("jlc-queue-changed", onQueue);
+  }, [reload, reloadPending]);
+  const offlineForms = pendingOrderForms();
+  // Per-design, per-size rows for the Pending Deliveries board, so an order
+  // form saved offline is visible as waiting pieces straight away.
+  const offlinePendingRows = offlineForms.flatMap((f) =>
+    (f.items || []).flatMap((it) =>
+      SIZES.filter(([k]) => Number(it[k]) > 0).map(([k, lbl]) => ({
+        offline: true, qid: f.qid, ref: "⟳ offline", customer: f.customer,
+        design_no: it.design_no, size: lbl, pending: Number(it[k]),
+      }))));
 
   const del = async (id) => {
     if (!confirm("Delete this order form?")) return;
@@ -30,19 +48,26 @@ export default function Sales() {
   const { unlocked, unlock } = useAmountLock();
 
   const columns = [
-    { header: "Ref No.", cell: (r) => (
-      <span className="font-medium text-ink">{r.reference_no || r.bill_number}</span>
-    )},
+    { header: "Ref No.", cell: (r) => r.pending
+      ? <span className="text-xs font-semibold text-amber-400">⟳ offline</span>
+      : <span className="font-medium text-ink">{r.reference_no || r.bill_number}</span> },
     { header: "Date", key: "bill_date" },
-    { header: "Party", cell: (r) => (
-      <button className="text-accent hover:underline" onClick={() => setCustomerFor(r)}>{r.customer}</button>
-    )},
+    { header: "Party", cell: (r) => r.pending
+      ? <span className="text-ink">{r.customer}</span>
+      : <button className="text-accent hover:underline" onClick={() => setCustomerFor(r)}>{r.customer}</button> },
     { header: "Designs", key: "designs" },
     { header: "Total Qty", cell: (r) => num(r.total_qty) },
-    { header: "Total ₹", cell: (r) => (unlocked
+    { header: "Total ₹", cell: (r) => (r.pending ? "—" : unlocked
       ? rupeeFull(r.total_amount)
       : <button className="tracking-widest text-muted hover:text-accent" title="Tap to unlock amounts" onClick={unlock}>***</button>) },
-    { header: "Actions", cell: (r) => (
+    { header: "Actions", cell: (r) => r.pending ? (
+      <div className="flex items-center gap-3">
+        <span className="text-xs text-amber-400">will sync when online</span>
+        <button className="text-danger" onClick={() => {
+          if (confirm("Remove this offline order form? It has not been sent to the server yet.")) removeQueued(r.qid);
+        }}>Remove</button>
+      </div>
+    ) : (
       <div className="flex gap-3">
         <button className="text-accent" onClick={() => setPdfFor(r.id)}>PDF</button>
         <button className="text-accent" onClick={() => setDelivering(r)}>Delivery</button>
@@ -53,20 +78,25 @@ export default function Sales() {
   ];
 
   const pendingColumns = [
-    { header: "Ref No.", key: "ref" },
+    { header: "Ref No.", cell: (r) => r.offline
+      ? <span className="text-xs font-semibold text-amber-400">{r.ref}</span> : r.ref },
     { header: "Party", key: "customer" },
     { header: "Design", key: "design_no" },
     { header: "Size", key: "size" },
     { header: "Pending", cell: (r) => <span className="font-semibold text-warn">{num(r.pending, 0)}</span> },
-    { header: "In Stock Now", cell: (r) => num(r.in_stock, 0) },
+    { header: "In Stock Now", cell: (r) => (r.offline ? "—" : num(r.in_stock, 0)) },
     { header: "Status", cell: (r) => (
-      r.ready
+      r.offline
+        ? <span className="rounded px-2 py-0.5 text-xs font-semibold bg-warnSoft text-amber-400">Will sync when online</span>
+        : r.ready
         ? <span className="rounded px-2 py-0.5 text-xs font-semibold bg-okSoft text-ok">Ready to deliver</span>
         : r.in_stock > 0
         ? <span className="rounded px-2 py-0.5 text-xs font-semibold bg-warnSoft text-warn">Partial ({num(r.in_stock, 0)})</span>
         : <span className="rounded px-2 py-0.5 text-xs font-semibold bg-surface2 text-muted">Waiting stock</span>
     )},
-    { header: "Actions", cell: (r) => (
+    { header: "Actions", cell: (r) => r.offline ? (
+      <span className="text-xs text-muted">delivery opens after sync</span>
+    ) : (
       <div className="flex gap-3">
         <button className="text-accent" onClick={() => {
           const bill = bills?.find((b) => b.id === r.bill_id);
@@ -81,13 +111,13 @@ export default function Sales() {
     <div>
       <PageHeader title="Order Forms" subtitle="Tap Delivery on a bill, then a design, to mark how much is delivered. Tap a party name for their full history."
         action={<button className="btn-primary" onClick={() => setOpen(true)}>+ New Order Form</button>} />
-      {loading ? <Spinner /> : <Table columns={columns} rows={bills} empty="No order forms yet" />}
+      {loading ? <Spinner /> : <Table columns={columns} rows={[...offlineForms, ...(bills || [])]} empty="No order forms yet" />}
 
       <div className="mt-8">
         <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-muted">
           Pending Deliveries — waiting pieces per design &amp; size
         </h2>
-        <Table columns={pendingColumns} rows={pending || []}
+        <Table columns={pendingColumns} rows={[...offlinePendingRows, ...(pending || [])]}
                empty="Nothing pending — every ordered piece is delivered." />
       </div>
 
@@ -365,6 +395,12 @@ function DesignDeliverModal({ orderId, item, onClose, onSaved }) {
 
 function NewOrderForm({ onClose, onSaved, billId }) {
   const { data: customers } = useFetch("/api/customers");
+  // Customers saved offline (scanned visiting cards) that haven't synced yet —
+  // selectable right away so an order form can be made for them on the spot.
+  const partyList = [
+    ...(customers || []),
+    ...pendingCustomers().map((p) => ({ ...p, name: `${p.name} (new — will sync)` })),
+  ];
   const { data: products } = useFetch("/api/products");
   const { data: existing } = useFetch(billId ? `/api/sales/${billId}` : null, [billId]);
   const { data: availability } = useFetch("/api/finished-goods/availability");
@@ -451,14 +487,29 @@ function NewOrderForm({ onClose, onSaved, billId }) {
     if (!customerId) return setErr("Select a party");
     if (!items.length) return setErr("Add at least one design");
     setBusy(true); setErr("");
+    const isLocalParty = String(customerId).startsWith("local:");
+    const partyName = (partyList.find((c) => String(c.id) === String(customerId))?.name || "")
+      .replace(" (new — will sync)", "");
+    const qLabel = `Order form — ${partyName || "party"}`;
     const payload = {
-      customer_id: Number(customerId), bill_date: billDate, delivery_date: delivery || null,
+      // A "local:" id means the party was added offline and hasn't synced —
+      // the sync queue swaps in the real id when both records upload.
+      customer_id: isLocalParty ? customerId : Number(customerId),
+      bill_date: billDate, delivery_date: delivery || null,
       reference_no: reference, transport, agent,
       items: items.map((it) => ({
         design_no: it.design_no, product_id: it.product_id,
         ...Object.fromEntries(SIZES.map(([k]) => [k, it[k] || 0])),
       })),
     };
+    if (!billId && isLocalParty) {
+      // Must go through the queue so it syncs AFTER its customer.
+      if (queueRequest({ method: "post", url: "/api/sales", body: payload, label: qLabel })) {
+        alert("Order form saved on this device — it will sync (along with the new party) when the connection returns.");
+        onClose();
+      } else setErr("Could not save on this device — storage is full.");
+      setBusy(false); return;
+    }
     try {
       const { data } = billId ? await api.put(`/api/sales/${billId}`, payload) : await api.post("/api/sales", payload);
       onSaved(data.id);   // parent opens the PDF-options popup
@@ -466,7 +517,7 @@ function NewOrderForm({ onClose, onSaved, billId }) {
       // No internet: queue the new order form and sync it later. (Edits of
       // existing forms still need a connection.)
       if (!billId && isNetworkError(e) &&
-          queueRequest({ method: "post", url: "/api/sales", body: payload, label: "Order form" })) {
+          queueRequest({ method: "post", url: "/api/sales", body: payload, label: qLabel })) {
         alert("No internet — the order form is saved on this device and will sync automatically when the connection returns. (PDF can be printed after it syncs.)");
         onClose();
       } else setErr(apiError(e));
@@ -479,7 +530,7 @@ function NewOrderForm({ onClose, onSaved, billId }) {
         <Field label="Party (Customer)" required>
           <Select value={customerId} onChange={setCustomerId}>
             <option value="">— Select Party —</option>
-            {customers?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {partyList.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
         </Field>
         <Field label="Bill Date"><input type="date" className="input" value={billDate} onChange={(e) => setBillDate(e.target.value)} /></Field>

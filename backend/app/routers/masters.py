@@ -133,15 +133,32 @@ async def import_customers(file: UploadFile = File(...), db: Session = Depends(g
     fname = (file.filename or "").lower()
     content = await file.read()
 
+    def _cell(c):
+        if c is None:
+            return ""
+        # Excel stores phone numbers as numbers — avoid "9876543210.0"
+        if isinstance(c, float) and c.is_integer():
+            return str(int(c))
+        return str(c).strip()
+
     rows = []
+    if fname.endswith(".xls"):
+        raise HTTPException(400, "This is an old Excel format (.xls). Open the file and use "
+                                 "'Save As' → Excel Workbook (.xlsx), then upload again.")
     if fname.endswith((".xlsx", ".xlsm")):
         from openpyxl import load_workbook
         try:
             wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
         except Exception:
             raise HTTPException(400, "Could not read this Excel file — save it as .xlsx and try again")
-        for r in wb.active.iter_rows(values_only=True):
-            rows.append(["" if c is None else str(c).strip() for c in r])
+        # Read the first sheet that actually has data (files often carry an
+        # empty Sheet1 in front of the real list).
+        for ws in wb.worksheets:
+            sheet_rows = [[_cell(c) for c in r] for r in ws.iter_rows(values_only=True)]
+            sheet_rows = [r for r in sheet_rows if any(c for c in r)]
+            if sheet_rows:
+                rows = sheet_rows
+                break
     elif fname.endswith(".csv"):
         text = content.decode("utf-8-sig", errors="replace")
         rows = [[(c or "").strip() for c in r] for r in csv.reader(io.StringIO(text))]
