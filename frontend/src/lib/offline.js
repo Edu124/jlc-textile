@@ -80,10 +80,33 @@ export async function flushQueue() {
   return { synced, failed, remaining: queueCount() };
 }
 
+// The lists the client needs to SEE offline (customers, stock, order forms…).
+// Fetching them once per app start routes them through the service worker,
+// which keeps the freshest copy for offline viewing — even if the user never
+// opens those pages while online.
+const WARM_URLS = [
+  "/api/customers",
+  "/api/finished-goods",
+  "/api/finished-goods/availability",
+  "/api/sales",
+  "/api/sales/pending",
+  "/api/dashboard/summary",
+  "/api/dashboard/analytics",
+  "/api/raw-materials",
+  "/api/production/tailors",
+  "/api/settings",
+];
+
+export function warmOfflineCache() {
+  if (!navigator.onLine || !localStorage.getItem("jlc_token")) return;
+  WARM_URLS.forEach((u) => api.get(u).catch(() => {}));
+}
+
 // Wire up auto-sync: on regaining connection, on app load, and every 20s
 // while anything is pending (belt and braces for flaky connections).
 export function initOfflineSync() {
-  window.addEventListener("online", () => { flushQueue(); });
+  window.addEventListener("online", () => { flushQueue().then(warmOfflineCache); });
   setInterval(() => { if (navigator.onLine && queueCount() > 0) flushQueue(); }, 20_000);
   if (navigator.onLine && queueCount() > 0) setTimeout(flushQueue, 3_000);
+  setTimeout(warmOfflineCache, 4_000);   // snapshot the key lists for offline
 }
