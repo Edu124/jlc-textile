@@ -7,11 +7,13 @@ import { PageHeader, Table, Modal, Field, Select, Spinner } from "../components/
 
 /** Generic master CRUD screen.
  * fields: [{name, label, type, required, optionsFrom, optionLabel}]
- * pendingRows: () => rows saved offline & not yet synced (shown with a badge) */
-function CrudPage({ title, subtitle, endpoint, columns, fields, itemName, pendingRows }) {
+ * pendingRows: () => rows saved offline & not yet synced (shown with a badge)
+ * selectable: adds checkboxes + a bulk Delete Selected action */
+function CrudPage({ title, subtitle, endpoint, columns, fields, itemName, pendingRows, selectable }) {
   const { data: rows, loading, reload } = useFetch(endpoint);
   const [editing, setEditing] = useState(null); // null=closed, {}=new, {..}=edit
   const [, setTick] = useState(0);              // refresh when the sync queue changes
+  const [selected, setSelected] = useState(() => new Set());
 
   useEffect(() => {
     if (!pendingRows) return;
@@ -26,7 +28,33 @@ function CrudPage({ title, subtitle, endpoint, columns, fields, itemName, pendin
     catch (e) { alert(apiError(e)); }
   };
 
+  const ids = (rows || []).map((r) => r.id);
+  const allSelected = ids.length > 0 && ids.every((id) => selected.has(id));
+  const toggle = (id) => setSelected((prev) => {
+    const s = new Set(prev);
+    if (s.has(id)) s.delete(id); else s.add(id);
+    return s;
+  });
+
+  const bulkDel = async () => {
+    if (!selected.size) return;
+    if (!confirm(`Delete ${selected.size} selected ${title.toLowerCase()}?`)) return;
+    try {
+      await api.post(`${endpoint}/bulk-delete`, { ids: [...selected] });
+      setSelected(new Set()); reload();
+    } catch (e) { alert(apiError(e)); }
+  };
+
   const cols = [
+    ...(selectable ? [{
+      header: <input type="checkbox" className="h-4 w-4 accent-accent"
+                     checked={allSelected}
+                     onChange={() => setSelected(allSelected ? new Set() : new Set(ids))} />,
+      cell: (r) => r.pending ? null : (
+        <input type="checkbox" className="h-4 w-4 accent-accent"
+               checked={selected.has(r.id)} onChange={() => toggle(r.id)} />
+      ),
+    }] : []),
     ...columns,
     { header: "Actions", cell: (r) => r.pending ? (
       <span className="text-xs text-amber-400">⟳ will sync when online</span>
@@ -43,6 +71,14 @@ function CrudPage({ title, subtitle, endpoint, columns, fields, itemName, pendin
     <div>
       <PageHeader title={title} subtitle={subtitle}
         action={<button className="btn-primary" onClick={() => setEditing({})}>+ Add {itemName}</button>} />
+      {selectable && selected.size > 0 && (
+        <div className="mb-3 flex items-center gap-3 rounded-xl bg-dangerSoft px-4 py-2">
+          <span className="text-sm font-semibold text-danger">{selected.size} selected</span>
+          <button className="rounded-lg bg-danger px-3 py-1.5 text-sm font-semibold text-white"
+                  onClick={bulkDel}>Delete Selected</button>
+          <button className="text-sm text-muted hover:text-ink" onClick={() => setSelected(new Set())}>Clear</button>
+        </div>
+      )}
       {loading ? <Spinner /> : <Table columns={cols} rows={allRows} empty={`No ${title.toLowerCase()} yet`} />}
       {editing !== null && (
         <CrudForm endpoint={endpoint} fields={fields} itemName={itemName}
@@ -137,7 +173,8 @@ export const Suppliers = () => (
 );
 export const Customers = () => (
   <CrudPage title="Customers" itemName="Customer" endpoint="/api/customers"
-            columns={PARTY_COLS} fields={PARTY_FIELDS} pendingRows={pendingCustomers} />
+            columns={PARTY_COLS} fields={PARTY_FIELDS} pendingRows={pendingCustomers}
+            selectable />
 );
 
 export const MaterialTypes = () => (

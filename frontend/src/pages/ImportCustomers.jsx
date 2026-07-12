@@ -8,6 +8,17 @@ export default function ImportCustomers() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState("");
+  const [gsUrl, setGsUrl] = useState("");
+
+  const importSheet = async () => {
+    if (!gsUrl.trim()) return setErr("Paste the Google Sheets link first");
+    setErr(""); setResult(null); setBusy(true);
+    try {
+      const { data } = await api.post("/api/customers/import-gsheet", { url: gsUrl.trim() });
+      setResult(data); setGsUrl("");
+    } catch (ex) { setErr(apiError(ex)); }
+    finally { setBusy(false); }
+  };
 
   const onFile = async (e) => {
     const file = e.target.files?.[0];
@@ -62,6 +73,23 @@ export default function ImportCustomers() {
         <label htmlFor="import-input" className="btn-primary inline-flex cursor-pointer items-center gap-2">
           {busy ? <Spinner /> : "⬆ Choose Excel / CSV File"}
         </label>
+      </Card>
+
+      <Card title="Or import from Google Sheets" className="mt-4">
+        <p className="mb-1 text-sm text-ink2">
+          Paste the sheet's link — the tab open in the link is the one that gets imported.
+        </p>
+        <p className="mb-3 text-xs text-muted">
+          The sheet must be shared first: in Google Sheets tap <b>Share</b> and set
+          General access to <b>"Anyone with the link"</b> (Viewer is enough).
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <input className="input min-w-[240px] flex-1" placeholder="https://docs.google.com/spreadsheets/d/…"
+                 value={gsUrl} onChange={(e) => setGsUrl(e.target.value)} />
+          <button className="btn-primary" onClick={importSheet} disabled={busy}>
+            {busy ? <Spinner /> : "Import Sheet"}
+          </button>
+        </div>
       </Card>
 
       {err && <div className="mt-4 rounded-lg bg-dangerSoft px-3 py-2 text-sm text-danger">{err}</div>}

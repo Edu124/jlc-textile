@@ -81,11 +81,24 @@ def _party_dict(p):
             "address": p.address, "gst_number": p.gst_number}
 
 
+class BulkDeleteIn(BaseModel):
+    ids: list
+
+
 def _make_party_routes(path, Model):
     @router.get(f"/{path}", name=f"list_{path}")
     def _list(db: Session = Depends(get_db)):
         rows = db.query(Model).filter(Model.is_active == 1).order_by(Model.name).all()
         return [_party_dict(p) for p in rows]
+
+    @router.post(f"/{path}/bulk-delete", name=f"bulk_delete_{path}")
+    def _bulk_delete(body: BulkDeleteIn, db: Session = Depends(get_db)):
+        ids = [i for i in body.ids if isinstance(i, int)]
+        if ids:
+            db.query(Model).filter(Model.id.in_(ids)).update(
+                {"is_active": 0}, synchronize_session=False)   # soft delete
+            db.commit()
+        return {"ok": True, "deleted": len(ids)}
 
     @router.post(f"/{path}", name=f"create_{path}")
     def _create(body: PartyIn, db: Session = Depends(get_db)):
@@ -195,6 +208,37 @@ def import_customer_rows(body: ImportRowsIn, db: Session = Depends(get_db)):
     if len(body.rows) > 50000:
         raise HTTPException(400, "Too many rows — split the file and import in parts")
     rows = [r if isinstance(r, list) else [r] for r in body.rows]
+    return _run_customer_import(rows, db)
+
+
+class GSheetIn(BaseModel):
+    url: str
+
+
+@router.post("/customers/import-gsheet")
+def import_customers_gsheet(body: GSheetIn, db: Session = Depends(get_db)):
+    """Import customers straight from a Google Sheets link. The sheet must be
+    shared as 'Anyone with the link — Viewer'; we pull Google's CSV export of
+    the tab in the link (or the first tab) and run the normal import."""
+    import re
+    import requests as rq
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", body.url or "")
+    if not m:
+        raise HTTPException(400, "That doesn't look like a Google Sheets link — open the sheet "
+                                 "in the browser and copy the address from the top bar")
+    sheet_id = m.group(1)
+    gm = re.search(r"[#&?]gid=(\d+)", body.url or "")
+    gid = gm.group(1) if gm else "0"
+    export = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+    try:
+        resp = rq.get(export, timeout=30, allow_redirects=True)
+    except Exception:
+        raise HTTPException(502, "Could not reach Google Sheets — check the internet connection and try again")
+    if resp.status_code != 200 or "text/html" in resp.headers.get("content-type", ""):
+        raise HTTPException(400, "This sheet is private. In Google Sheets tap Share, set "
+                                 "'General access' to 'Anyone with the link' (Viewer), then try again.")
+    text = resp.content.decode("utf-8-sig", errors="replace")
+    rows = [[(c or "").strip() for c in r] for r in csv.reader(io.StringIO(text))]
     return _run_customer_import(rows, db)
 
 
